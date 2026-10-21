@@ -116,7 +116,37 @@ class SettingsViewModel @Inject constructor(
 
     val connectedWatches = phoneWearableBridge.connectedWatches
     val watchLastSyncTimestamp = phoneWearableBridge.lastSyncTimestamp
+    val watchSyncedPlaylistIds = settingsPreferences.watchSyncedPlaylistIds
 
+    private val _availableWatchPlaylists = MutableStateFlow<List<com.lastwave.core.sync.WearPlaylistItem>>(emptyList())
+    val availableWatchPlaylists = _availableWatchPlaylists.asStateFlow()
+
+    fun loadAvailableWatchPlaylists() {
+        viewModelScope.launch {
+            _availableWatchPlaylists.value = phoneWearableBridge.getAvailableWatchPlaylists()
+        }
+    }
+
+    fun toggleWatchPlaylistSynced(playlistId: String) {
+        viewModelScope.launch {
+            val current = settingsPreferences.watchSyncedPlaylistIds.value.toMutableSet()
+            if (current.contains(playlistId)) {
+                current.remove(playlistId)
+            } else {
+                current.add(playlistId)
+            }
+            settingsPreferences.setWatchSyncedPlaylistIds(current)
+            phoneWearableBridge.pushSyncedPlaylistsToWatch()
+        }
+    }
+
+    fun setAllWatchPlaylistsSynced(playlistIds: Set<String>) {
+        viewModelScope.launch {
+            settingsPreferences.setWatchSyncedPlaylistIds(playlistIds)
+            val success = phoneWearableBridge.pushSyncedPlaylistsToWatch()
+            showToast(if (success) "Synced ${playlistIds.size} items to watch" else "Playlists saved; watch queued")
+        }
+    }
     private val _watchStorageCap = MutableStateFlow(com.lastwave.core.sync.WearCachePreferences.CAP_500_MB)
     val watchStorageCap = _watchStorageCap.asStateFlow()
 
@@ -146,6 +176,8 @@ class SettingsViewModel @Inject constructor(
     fun refreshWatches() {
         viewModelScope.launch {
             phoneWearableBridge.refreshConnectedWatches()
+            _availableWatchPlaylists.value = phoneWearableBridge.getAvailableWatchPlaylists()
+            phoneWearableBridge.pushSyncedPlaylistsToWatch()
         }
     }
 

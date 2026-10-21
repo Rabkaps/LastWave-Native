@@ -10,7 +10,7 @@ android {
     compileSdk 37
 
     defaultConfig {
-        applicationId 'com.lastwave.wear'
+        applicationId 'com.lastwave.app'
         minSdk 30
         targetSdk 35
         versionCode 1

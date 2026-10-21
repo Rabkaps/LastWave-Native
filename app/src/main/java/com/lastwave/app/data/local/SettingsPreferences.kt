@@ -306,6 +306,7 @@ class SettingsPreferences @Inject constructor(
         val CANVAS_OVER_CELLULAR = booleanPreferencesKey("lw_canvas_over_cellular")
         val LIVE_TELEMETRY_ENABLED = booleanPreferencesKey("lw_live_telemetry_enabled")
         val PODCASTS_ENABLED = booleanPreferencesKey("lw_podcasts_enabled")
+        val WATCH_SYNCED_PLAYLIST_IDS = stringSetPreferencesKey("lw_watch_synced_playlist_ids")
     }
 
     val settings: Flow<MiscSettings> = dataStore.data
@@ -740,8 +741,30 @@ class SettingsPreferences @Inject constructor(
         dataStore.edit { it[Keys.LIVE_TELEMETRY_ENABLED] = enabled }
     }
 
+    val watchSyncedPlaylistIds: StateFlow<Set<String>> = dataStore.data
+        .map { p ->
+            p.readSafely(Keys.WATCH_SYNCED_PLAYLIST_IDS) ?: DEFAULT_WATCH_SYNCED_PLAYLIST_IDS
+        }
+        .stateIn(
+            CoroutineScope(Dispatchers.IO + SupervisorJob()),
+            SharingStarted.Eagerly,
+            DEFAULT_WATCH_SYNCED_PLAYLIST_IDS
+        )
+
+    suspend fun setWatchSyncedPlaylistIds(ids: Set<String>) {
+        dataStore.edit { it[Keys.WATCH_SYNCED_PLAYLIST_IDS] = ids }
+    }
+
     private companion object {
         val LOSSLESS_QUALITIES = setOf(-1, 4, 5, 6, 7, 27, 28)
         val DOWNLOAD_QUALITIES = setOf(-1, 4, 5, 6, 7, 27, 28)
+        val DEFAULT_WATCH_SYNCED_PLAYLIST_IDS = setOf(
+            "liked_songs",
+            "local_songs",
+            "radio_supermix",
+            "radio_infinite",
+            "radio_chill",
+            "radio_energy"
+        )
     }
 }

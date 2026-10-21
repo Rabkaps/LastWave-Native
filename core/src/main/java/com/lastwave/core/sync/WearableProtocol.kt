@@ -11,6 +11,10 @@ object WearableProtocol {
     const val PATH_AUTH_REQUEST = "/lastwave/auth/request"
     const val PATH_QUICK_MIX_REQUEST = "/lastwave/library/quick_mix_request"
     const val PATH_QUICK_MIX_RESPONSE = "/lastwave/library/quick_mix_response"
+    const val PATH_PLAYLISTS_REQUEST = "/lastwave/library/playlists_request"
+    const val PATH_PLAYLISTS_RESPONSE = "/lastwave/library/playlists_response"
+    const val PATH_PLAYLIST_TRACKS_REQUEST = "/lastwave/library/playlist_tracks_request"
+    const val PATH_PLAYLIST_TRACKS_RESPONSE = "/lastwave/library/playlist_tracks_response"
     const val PATH_PLAYBACK_REQUEST = "/lastwave/playback/request_state"
     const val PATH_PLAYBACK_RESPONSE = "/lastwave/playback/response_state"
     const val PATH_PING = "/lastwave/system/ping"
@@ -23,6 +27,7 @@ object WearableProtocol {
     const val PATH_AUTH_DATA = "/lastwave/data/auth_session"
     const val PATH_FAVORITES = "/lastwave/data/favorites"
     const val PATH_SETTINGS = "/lastwave/data/settings"
+    const val PATH_SYNCED_PLAYLISTS = "/lastwave/data/synced_playlists"
 
     // Capabilities
     const val CAPABILITY_PHONE_APP = "lastwave_phone_app"
@@ -38,6 +43,8 @@ data class PlaybackCommand(
     val positionMs: Long? = null,
     val volumeDelta: Float? = null,
     val songId: String? = null,
+    val playlistId: String? = null,
+    val radioId: String? = null,
     val timestamp: Long = System.currentTimeMillis()
 ) {
     enum class Action {
@@ -50,6 +57,8 @@ data class PlaybackCommand(
         TOGGLE_LIKE,
         ADJUST_VOLUME,
         PLAY_TRACK,
+        PLAY_PLAYLIST,
+        PLAY_RADIO,
     }
 }
 
@@ -89,9 +98,9 @@ data class WearAuthSession(
  */
 @Serializable
 data class WearCachePreferences(
-    val maxCacheSizeBytes: Long = DEFAULT_CACHE_CAP_BYTES, // Default 1.5 GB
+    val maxCacheSizeBytes: Long = DEFAULT_CACHE_CAP_BYTES,
     val preferLosslessDownloads: Boolean = false,
-    val streamingQuality: String = QUALITY_HIGH // HIGH, LOSSLESS, SAVER
+    val streamingQuality: String = QUALITY_HIGH
 ) {
     companion object {
         const val DEFAULT_CACHE_CAP_BYTES = 1_500_000_000L // ~1.5 GB
@@ -142,3 +151,45 @@ data class WearQuickMixPayload(
     val timestamp: Long = System.currentTimeMillis()
 )
 
+/**
+ * Playlist or Radio representation specifically designed to be lightweight on Wear OS.
+ */
+@Serializable
+data class WearPlaylistItem(
+    val id: String,
+    val title: String,
+    val subtitle: String = "",
+    val artworkUrl: String? = null,
+    val trackCount: Int = 0,
+    val isRadio: Boolean = false,
+    val source: String = "LastWave",
+    val radioSeedVideoId: String? = null
+)
+
+/**
+ * Collection of playlists and radios chosen on phone to appear on the watch.
+ */
+@Serializable
+data class WearPlaylistsPayload(
+    val playlists: List<WearPlaylistItem> = emptyList(),
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+/**
+ * Request payload when watch requests tracks inside a specific playlist.
+ */
+@Serializable
+data class WearPlaylistTracksRequest(
+    val playlistId: String
+)
+
+/**
+ * Response payload containing tracks of a specific playlist.
+ */
+@Serializable
+data class WearPlaylistTracksResponse(
+    val playlistId: String,
+    val playlistTitle: String,
+    val tracks: List<WearTrackItem> = emptyList(),
+    val timestamp: Long = System.currentTimeMillis()
+)

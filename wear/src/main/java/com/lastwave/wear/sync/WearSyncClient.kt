@@ -7,6 +7,7 @@ import com.google.android.gms.wearable.CapabilityClient
 import com.google.android.gms.wearable.Node
 import com.google.android.gms.wearable.Wearable
 import com.lastwave.core.sync.PlaybackCommand
+import com.lastwave.core.sync.WearPlaylistTracksRequest
 import com.lastwave.core.sync.WearableProtocol
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -22,6 +23,41 @@ class WearSyncClient(
     private val capabilityClient = Wearable.getCapabilityClient(context)
     private val nodeClient = Wearable.getNodeClient(context)
     private val json = Json { ignoreUnknownKeys = true }
+    private val dataClient = Wearable.getDataClient(context)
+
+    /**
+     * Loads locally cached DataItems instantly from Wearable DataClient storage without network wait.
+     */
+    suspend fun loadLocalCachedDataItems() = withContext(Dispatchers.IO) {
+        runCatching {
+            val uriPlaylists = android.net.Uri.parse("wear://*" + WearableProtocol.PATH_SYNCED_PLAYLISTS)
+            val dataItemBuffer = Tasks.await(dataClient.getDataItems(uriPlaylists))
+            for (item in dataItemBuffer) {
+                val dataMap = com.google.android.gms.wearable.DataMapItem.fromDataItem(item).dataMap
+                val jsonStr = dataMap.getString("payload")
+                if (!jsonStr.isNullOrBlank()) {
+                    val payload = json.decodeFromString<com.lastwave.core.sync.WearPlaylistsPayload>(jsonStr)
+                    WearDataLayerListenerService.updateSyncedPlaylists(payload.playlists)
+                }
+            }
+            dataItemBuffer.release()
+        }
+
+        runCatching {
+            val uriPlayback = android.net.Uri.parse("wear://*" + WearableProtocol.PATH_PLAYBACK_STATE)
+            val dataItemBuffer = Tasks.await(dataClient.getDataItems(uriPlayback))
+            for (item in dataItemBuffer) {
+                val dataMap = com.google.android.gms.wearable.DataMapItem.fromDataItem(item).dataMap
+                val jsonStr = dataMap.getString("payload")
+                if (!jsonStr.isNullOrBlank()) {
+                    val state = json.decodeFromString<com.lastwave.core.sync.WearPlaybackState>(jsonStr)
+                    WearDataLayerListenerService.updatePhonePlaybackState(state)
+                }
+            }
+            dataItemBuffer.release()
+        }
+    }
+
 
     /**
      * Resolves connected phone nodes, using CapabilityClient with fallback to NodeClient.
@@ -108,6 +144,63 @@ class WearSyncClient(
             false
         }
     }
+
+    /**
+     * Requests synced Playlists & Radios chosen on the phone app
+     */
+    suspend fun requestPlaylistsFromPhone(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val nodes = getConnectedPhoneNodes()
+            if (nodes.isEmpty()) return@withContext false
+
+            for (node in nodes) {
+                Tasks.await(messageClient.sendMessage(node.id, WearableProtocol.PATH_PLAYLISTS_REQUEST, byteArrayOf()))
+            }
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "requestPlaylistsFromPhone failed: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Requests tracks for a specific playlist from the phone
+     */
+    suspend fun requestPlaylistTracksFromPhone(playlistId: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val nodes = getConnectedPhoneNodes()
+            if (nodes.isEmpty()) return@withContext false
+
+            val payload = json.encodeToString(WearPlaylistTracksRequest(playlistId)).toByteArray(Charsets.UTF_8)
+            for (node in nodes) {
+                Tasks.await(messageClient.sendMessage(node.id, WearableProtocol.PATH_PLAYLIST_TRACKS_REQUEST, payload))
+            }
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "requestPlaylistTracksFromPhone failed: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * Commands phone to play an entire playlist
+     */
+    suspend fun playPlaylistOnPhone(playlistId: String): Boolean = sendCommandToPhone(
+        PlaybackCommand(
+            action = PlaybackCommand.Action.PLAY_PLAYLIST,
+            playlistId = playlistId
+        )
+    )
+
+    /**
+     * Commands phone to start a specific radio or mix
+     */
+    suspend fun playRadioOnPhone(radioId: String): Boolean = sendCommandToPhone(
+        PlaybackCommand(
+            action = PlaybackCommand.Action.PLAY_RADIO,
+            radioId = radioId
+        )
+    )
 
     /**
      * Sends diagnostic ping to phone and awaits delivery

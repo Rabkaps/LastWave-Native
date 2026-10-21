@@ -15,6 +15,9 @@ import com.google.android.gms.wearable.WearableListenerService
 import com.lastwave.core.sync.WearAuthSession
 import com.lastwave.core.sync.WearCachePreferences
 import com.lastwave.core.sync.WearPlaybackState
+import com.lastwave.core.sync.WearPlaylistItem
+import com.lastwave.core.sync.WearPlaylistTracksResponse
+import com.lastwave.core.sync.WearPlaylistsPayload
 import com.lastwave.core.sync.WearQuickMixPayload
 import com.lastwave.core.sync.WearTrackItem
 import com.lastwave.core.sync.WearableProtocol
@@ -44,8 +47,30 @@ class WearDataLayerListenerService : WearableListenerService() {
         private val _quickMixTracks = MutableStateFlow<List<WearTrackItem>>(emptyList())
         val quickMixTracks = _quickMixTracks.asStateFlow()
 
+        private val DEFAULT_PLAYLISTS = listOf(
+            WearPlaylistItem(id = "liked_songs", title = "Liked Songs", subtitle = "Your favorites", trackCount = 0, source = "LastWave", isRadio = false),
+            WearPlaylistItem(id = "local_songs", title = "Device Songs", subtitle = "Offline on phone", trackCount = 0, source = "Local", isRadio = false),
+            WearPlaylistItem(id = "downloaded_songs", title = "Downloaded FLAC", subtitle = "Lossless storage", trackCount = 0, source = "Downloads", isRadio = false),
+            WearPlaylistItem(id = "radio_supermix", title = "My Supermix", subtitle = "Endless personalized mix", trackCount = 0, source = "Radio", isRadio = true),
+            WearPlaylistItem(id = "radio_infinite", title = "Infinite Radio", subtitle = "Algorithmic discovery mix", trackCount = 0, source = "Radio", isRadio = true),
+            WearPlaylistItem(id = "radio_chill", title = "Chill Radio", subtitle = "Relaxing & acoustic vibes", trackCount = 0, source = "Radio", isRadio = true),
+            WearPlaylistItem(id = "radio_energy", title = "Energy Radio", subtitle = "Upbeat & workout tempo", trackCount = 0, source = "Radio", isRadio = true),
+            WearPlaylistItem(id = "radio_focus", title = "Focus Radio", subtitle = "Deep work & ambient", trackCount = 0, source = "Radio", isRadio = true)
+        )
+        private val _syncedPlaylists = MutableStateFlow<List<WearPlaylistItem>>(DEFAULT_PLAYLISTS)
+        val syncedPlaylists = _syncedPlaylists.asStateFlow()
+
+        private val _playlistTracks = MutableStateFlow<Map<String, List<WearTrackItem>>>(emptyMap())
+        val playlistTracks = _playlistTracks.asStateFlow()
+
         fun updatePhonePlaybackState(state: WearPlaybackState) {
             _phonePlaybackState.value = state
+        }
+
+        fun updateSyncedPlaylists(playlists: List<WearPlaylistItem>) {
+            if (playlists.isNotEmpty()) {
+                _syncedPlaylists.value = playlists
+            }
         }
     }
 
@@ -80,6 +105,18 @@ class WearDataLayerListenerService : WearableListenerService() {
                             }
                         }
                     }
+                    WearableProtocol.PATH_SYNCED_PLAYLISTS -> {
+                        val dataMap = DataMapItem.fromDataItem(event.dataItem).dataMap
+                        val jsonString = dataMap.getString("payload")
+                        if (!jsonString.isNullOrBlank()) {
+                            try {
+                                val payload = json.decodeFromString<WearPlaylistsPayload>(jsonString)
+                                _syncedPlaylists.value = payload.playlists
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error decoding synced playlists data: ${e.message}")
+                            }
+                        }
+                    }
                     WearableProtocol.PATH_CACHE_SETTINGS -> {
                         val dataMap = DataMapItem.fromDataItem(event.dataItem).dataMap
                         val jsonString = dataMap.getString("payload")
@@ -108,6 +145,28 @@ class WearDataLayerListenerService : WearableListenerService() {
                         _phonePlaybackState.value = state
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed decoding playback response: ${e.message}")
+                    }
+                }
+            }
+            WearableProtocol.PATH_PLAYLISTS_RESPONSE -> {
+                val jsonStr = messageEvent.data.toString(Charsets.UTF_8)
+                if (jsonStr.isNotBlank()) {
+                    try {
+                        val payload = json.decodeFromString<WearPlaylistsPayload>(jsonStr)
+                        _syncedPlaylists.value = payload.playlists
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed decoding playlists response: ${e.message}")
+                    }
+                }
+            }
+            WearableProtocol.PATH_PLAYLIST_TRACKS_RESPONSE -> {
+                val jsonStr = messageEvent.data.toString(Charsets.UTF_8)
+                if (jsonStr.isNotBlank()) {
+                    try {
+                        val payload = json.decodeFromString<WearPlaylistTracksResponse>(jsonStr)
+                        _playlistTracks.value = _playlistTracks.value + (payload.playlistId to payload.tracks)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed decoding playlist tracks response: ${e.message}")
                     }
                 }
             }

@@ -23,6 +23,9 @@
         <meta-data
             android:name="com.google.android.wearable.standalone"
             android:value="true" />
+        <meta-data
+            android:name="com.google.android.gms.wearable.WEARABLE_CAPABILITY_RESOURCE"
+            android:resource="@array/android_wear_capabilities" />
 
         <activity
             android:name=".ui.MainActivity"
@@ -52,10 +55,11 @@
             <intent-filter>
                 <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />
                 <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
-                <data
-                    android:host="*"
-                    android:pathPrefix="/lastwave"
-                    android:scheme="wear" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/lastwave" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.CAPABILITY_CHANGED" />
+                <data android:scheme="wear" android:host="*" android:path="/lastwave_phone_app" />
             </intent-filter>
         </service>
 

@@ -33,6 +33,7 @@ class LastWaveApplication : Application(), ImageLoaderFactory {
     @Inject lateinit var trackDownloadManager: dagger.Lazy<com.lastwave.app.data.download.TrackDownloadManager>
     @Inject lateinit var discordPresenceManager: dagger.Lazy<com.lastwave.app.presence.DiscordPresenceManager>
     @Inject lateinit var appLocaleManager: dagger.Lazy<com.lastwave.app.util.AppLocaleManager>
+    @Inject lateinit var phoneWearableBridge: dagger.Lazy<com.lastwave.app.sync.PhoneWearableBridge>
 
     override fun attachBaseContext(base: Context) {
         // Pin the selected locale before any component (providers, services,
@@ -56,6 +57,7 @@ class LastWaveApplication : Application(), ImageLoaderFactory {
         // AppCompat restores the last requested locale itself; the collector
         // inside keeps it in sync with DataStore afterwards.
         runCatching { appLocaleManager.get().start() }
+        runCatching { phoneWearableBridge.get().startSync(applicationScope) }
         runCatching { com.lastwave.app.playback.PlaybackDiagnostics.install(this) }
         runCatching { com.lastwave.app.data.music.potoken.BotGuardTokenGenerator.initialize(this) }
         runCatching { com.lastwave.app.data.canvas.CanvasCache.init(this) }

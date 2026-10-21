@@ -67,9 +67,11 @@ class MainActivity : ComponentActivity() {
                     val phoneState by WearDataLayerListenerService.phonePlaybackState.collectAsState()
                     val localState by WearPlaybackService.localPlaybackState.collectAsState()
 
-                    // Automatically request state on launch
+                    // Automatically load cached local DataItems and request fresh state on launch
                     LaunchedEffect(Unit) {
+                        syncClient.loadLocalCachedDataItems()
                         syncClient.requestPlaybackStateFromPhone()
+                        syncClient.requestPlaylistsFromPhone()
                         syncClient.requestQuickMixFromPhone()
                     }
 
@@ -125,6 +127,7 @@ class MainActivity : ComponentActivity() {
                         }
                         WearScreen.BROWSE -> {
                             BrowseScreen(
+                                isCompanionMode = isCompanionMode,
                                 onPlayTrack = { song ->
                                     isCompanionMode = false // Switch to standalone watch playback
                                     val mediaItem = MediaItem.Builder()
@@ -150,6 +153,20 @@ class MainActivity : ComponentActivity() {
                                                 songId = phoneTrack.id
                                             )
                                         )
+                                    }
+                                    currentScreen = WearScreen.NOW_PLAYING
+                                },
+                                onPlayPlaylist = { playlistId ->
+                                    isCompanionMode = true
+                                    scope.launch {
+                                        syncClient.playPlaylistOnPhone(playlistId)
+                                    }
+                                    currentScreen = WearScreen.NOW_PLAYING
+                                },
+                                onPlayRadio = { radioId ->
+                                    isCompanionMode = true
+                                    scope.launch {
+                                        syncClient.playRadioOnPhone(radioId)
                                     }
                                     currentScreen = WearScreen.NOW_PLAYING
                                 },
@@ -186,7 +203,9 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         lifecycleScope.launch {
+            syncClient.loadLocalCachedDataItems()
             syncClient.requestPlaybackStateFromPhone()
+            syncClient.requestPlaylistsFromPhone()
         }
     }
 }
