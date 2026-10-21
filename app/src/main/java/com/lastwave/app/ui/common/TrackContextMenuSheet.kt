@@ -58,6 +58,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import com.lastwave.app.data.canvas.displayName
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
@@ -301,6 +302,7 @@ fun TrackContextMenuSheet(
     downloadViewModel: DownloadMenuViewModel = hiltViewModel(),
     exclusionViewModel: RecommendationExclusionMenuViewModel = hiltViewModel(),
     artistAlbumViewModel: ArtistAlbumMenuViewModel = hiltViewModel(),
+    canvasRowViewModel: CanvasRowViewModel = hiltViewModel(),
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
@@ -312,6 +314,14 @@ fun TrackContextMenuSheet(
     var showTimerDialog by remember { mutableStateOf(false) }
     var resolvedGenre by remember(target) { mutableStateOf<String?>(null) }
     var resolvingGenre by remember(target) { mutableStateOf(false) }
+    var resolvedCanvasSource by remember(target) {
+        val cached = if (target is TrackMenuTarget.Track) {
+            val t = playableTrack ?: PlayableTrack(title = target.name, artist = target.artist)
+            canvasRowViewModel.cached(t.title, t.artist, t.videoId)
+        } else null
+        mutableStateOf(cached?.source?.displayName())
+    }
+    var resolvingCanvas by remember(target) { mutableStateOf(false) }
     val activeDownloads by downloadViewModel.activeDownloads.collectAsStateWithLifecycle()
     val downloadQuality by downloadViewModel.downloadQuality.collectAsStateWithLifecycle()
     val downloadLabel = remember(downloadQuality) { downloadLabelForQuality(context, downloadQuality) }
@@ -330,6 +340,28 @@ fun TrackContextMenuSheet(
             resolvingGenre = true
             resolvedGenre = runCatching { genreResolverViewModel.resolve(target.name, target.artist) }.getOrNull()
             resolvingGenre = false
+        }
+    }
+
+    LaunchedEffect(target, playableTrack) {
+        if (target is TrackMenuTarget.Track && resolvedCanvasSource == null) {
+            val t = playableTrack ?: PlayableTrack(title = target.name, artist = target.artist)
+            if (canvasRowViewModel.hasResolved(t.title, t.artist, t.videoId)) {
+                resolvedCanvasSource = canvasRowViewModel.cached(t.title, t.artist, t.videoId)?.source?.displayName()
+            } else {
+                resolvingCanvas = true
+                val artwork = runCatching {
+                    canvasRowViewModel.resolve(
+                        title = t.title,
+                        artist = t.artist,
+                        album = t.album,
+                        trackId = t.videoId,
+                        durationMs = t.durationMs,
+                    )
+                }.getOrNull()
+                resolvedCanvasSource = artwork?.source?.displayName()
+                resolvingCanvas = false
+            }
         }
     }
 
@@ -482,10 +514,7 @@ fun TrackContextMenuSheet(
 
                 val playable = playableTrack ?: PlayableTrack(title = target.name, artist = target.artist)
                 QuickActionsRow(
-                    onPlay = {
-                        onPlayInLastWave?.invoke() ?: musicPlayer.play(playable, sourceLabel = playbackSourceLabel)
-                        onDismiss()
-                    },
+                    onJam = { showJamSheet = true },
                     onPlayNext = { musicPlayer.playNext(playable); onDismiss() },
                     onAddToPlaylist = { addToPlaylist(playable); onDismiss() },
                 )
@@ -519,6 +548,20 @@ fun TrackContextMenuSheet(
                                 onClick = if (!resolvingGenre && !genre.isNullOrBlank()) {
                                     { exploreGenre(genre); onDismiss() }
                                 } else null,
+                            )
+                        }
+                    }
+                    val canvasSource = resolvedCanvasSource
+                    if (resolvingCanvas || !canvasSource.isNullOrBlank()) {
+                        add { pos ->
+                            MenuInfoRow(
+                                icon = Icons.Filled.PlayCircle,
+                                text = if (resolvingCanvas) stringResource(R.string.menu_resolving_canvas) else stringResource(
+                                    R.string.menu_canvas_value,
+                                    canvasSource ?: stringResource(R.string.menu_canvas_none),
+                                ),
+                                loading = resolvingCanvas,
+                                position = pos,
                             )
                         }
                     }
@@ -581,6 +624,16 @@ fun TrackContextMenuSheet(
                                     onDismiss()
                                 }
                             }
+                        }
+                    }
+                    add { pos ->
+                        MenuActionRow(
+                            icon = Icons.Filled.PlayCircle,
+                            label = stringResource(R.string.menu_quick_play),
+                            position = pos,
+                        ) {
+                            onPlayInLastWave?.invoke() ?: musicPlayer.play(playable, sourceLabel = playbackSourceLabel)
+                            onDismiss()
                         }
                     }
                     add { pos -> MenuActionRow(Icons.Filled.QueueMusic, stringResource(R.string.menu_add_queue), position = pos) { musicPlayer.addToQueue(playable); onDismiss() } }
@@ -751,7 +804,7 @@ private fun StartMixCard(onClick: () -> Unit) {
  *  sheet's current grouped language instead of the old outlined container. */
 @Composable
 private fun QuickActionsRow(
-    onPlay: () -> Unit,
+    onJam: () -> Unit,
     onPlayNext: () -> Unit,
     onAddToPlaylist: () -> Unit,
 ) {
@@ -759,7 +812,7 @@ private fun QuickActionsRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        QuickActionCard(Icons.Filled.PlayCircle, stringResource(R.string.menu_quick_play), Modifier.weight(1f), onPlay)
+        QuickActionCard(Icons.Filled.Group, stringResource(R.string.menu_quick_jam), Modifier.weight(1f), onJam)
         QuickActionCard(Icons.Filled.QueuePlayNext, stringResource(R.string.menu_quick_play_next), Modifier.weight(1f), onPlayNext)
         QuickActionCard(Icons.Filled.PlaylistAdd, stringResource(R.string.menu_quick_add_playlist), Modifier.weight(1f), onAddToPlaylist)
     }
