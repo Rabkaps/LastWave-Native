@@ -10,6 +10,7 @@ import com.lastwave.app.data.generate.youtubeVideoIdOrNull
 import com.lastwave.app.data.music.InnerTubeMusicApi
 import com.lastwave.app.data.music.YouTubeMusicTrack
 import com.lastwave.app.data.music.YouTubePlaylistSummary
+import com.lastwave.app.data.music.distinctPlaylistSongs
 import com.lastwave.app.data.playlist.PlaylistImportManager
 import com.lastwave.app.data.playlist.PlaylistRepository
 import com.lastwave.app.data.playlist.SavedPlaylist
@@ -87,7 +88,12 @@ class YtMusicLibraryManager @Inject constructor(
         val localIds = local.mapTo(mutableSetOf()) { it.id }
         val linkedRemoteIds = mappings.filterKeys { it in localIds }.values
             .mapTo(mutableSetOf()) { it.remotePlaylistId.removePrefix("VL") }
-        account.filterNot { it.id in hiddenIds || it.id.removePrefix("VL") in linkedRemoteIds }.map { summary ->
+        val localHasLiked = local.any { it.mode == com.lastwave.app.data.playlist.LIKED_SONGS_MODE }
+        account.filterNot {
+            it.id in hiddenIds ||
+            it.id.removePrefix("VL") in linkedRemoteIds ||
+            (localHasLiked && (it.id == "LM" || it.id == "FEmusic_liked_videos" || it.id.removePrefix("VL") == "LM"))
+        }.map { summary ->
             summaryToPlaylist(summary).copy(isPinned = summary.id in pinnedIds)
         }
     }.stateIn(applicationScope, SharingStarted.Eagerly, emptyList())
@@ -365,7 +371,7 @@ class YtMusicLibraryManager @Inject constructor(
                 title = summary?.title?.takeIf { it.isNotBlank() } ?: "YouTube Playlist",
                 subtitle = "YouTube Music • Connected account",
                 mode = "youtube_remote",
-                tracks = partialSongs.map(YouTubeMusicTrack::toGeneratedTrack),
+                tracks = partialSongs.distinctPlaylistSongs().map(YouTubeMusicTrack::toGeneratedTrack),
                 createdAtMillis = 0L,
                 remotePlaylistId = remoteId,
                 remoteArtworkUrl = partialArtwork,
@@ -373,7 +379,11 @@ class YtMusicLibraryManager @Inject constructor(
             )
             details[localId] = partialPlaylist
             onUpdate?.invoke(partialPlaylist)
-        } ?: return@withContext details[localId]
+        } ?: run {
+            val fallback = details[localId] ?: readFromDiskCache(localId)
+            if (fallback != null) onUpdate?.invoke(fallback)
+            return@withContext fallback
+        }
 
         val title = if (result.title.isNotBlank() && result.title != "Imported Playlist") {
             result.title
@@ -391,7 +401,7 @@ class YtMusicLibraryManager @Inject constructor(
             title = title,
             subtitle = "YouTube Music • Connected account",
             mode = "youtube_remote",
-            tracks = result.tracks.map(YouTubeMusicTrack::toGeneratedTrack),
+            tracks = result.tracks.distinctPlaylistSongs().map(YouTubeMusicTrack::toGeneratedTrack),
             createdAtMillis = 0L,
             remotePlaylistId = result.id,
             remoteArtworkUrl = artworkUrl,
@@ -487,6 +497,21 @@ class YtMusicLibraryManager @Inject constructor(
         added
     }
 
+    /**
+     * Mirrors a like/unlike from the player onto the connected YouTube Music
+     * account. Best effort by design: a failure returns false for the caller
+     * to surface, never to undo the local like.
+     *
+     * Returns true — explicitly not a failure — when there is nothing to
+     * mirror: no account connected, or the track carries no YouTube videoId
+     * (an imported local file). Those cases must not read as errors.
+     */
+    suspend fun mirrorLikeToYouTube(track: GeneratedTrack, loved: Boolean): Boolean {
+        if (!auth.connection.value.isConnected) return true
+        val videoId = track.youtubeVideoIdOrNull() ?: return true
+        return if (loved) innerTube.likeVideo(videoId) else innerTube.removeVideoLike(videoId)
+    }
+
     suspend fun findDuplicatePlaylistIds(
         localIds: Set<Long>,
         track: GeneratedTrack,
@@ -540,8 +565,11 @@ class YtMusicLibraryManager @Inject constructor(
         val targetVideoId = target.youtubeVideoIdOrNull() ?: return@withContext playlist
         val owned = getOwnedPlaylist(localId, remoteId, targetVideoId) ?: return@withContext playlist
         val item = owned.items.firstOrNull { it.videoId == targetVideoId && it.setVideoId != null }
-            ?: return@withContext playlist
-        if (!innerTube.removeVideosFromRemotePlaylist(remoteId, listOf(item.setVideoId!! to item.videoId))) {
+        if (item != null) {
+            if (!innerTube.removeVideosFromRemotePlaylist(remoteId, listOf(item.setVideoId!! to item.videoId))) {
+                return@withContext playlist
+            }
+        } else if (!owned.complete) {
             return@withContext playlist
         }
         val remainingTracks = playlist.tracks.filterIndexed { i, _ -> i != index }
@@ -549,7 +577,9 @@ class YtMusicLibraryManager @Inject constructor(
             tracks = remainingTracks,
             remoteTrackCount = playlist.remoteTrackCount?.let { maxOf(0, it - 1) },
         )
-        ownedPlaylistCache[localId] = System.currentTimeMillis() to owned.copy(items = owned.items.filterNot { it.setVideoId == item.setVideoId })
+        ownedPlaylistCache[localId] = System.currentTimeMillis() to owned.copy(
+            items = if (item != null) owned.items.filterNot { it.setVideoId == item.setVideoId } else owned.items,
+        )
         details[localId] = updatedPlaylist
         writeToDiskCache(localId, updatedPlaylist)
         updatedPlaylist.remoteTrackCount?.let { updateRemoteTrackCount(remoteId, it) }

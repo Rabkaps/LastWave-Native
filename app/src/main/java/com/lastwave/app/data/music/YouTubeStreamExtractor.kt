@@ -24,7 +24,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class YouTubeStreamExtractor @Inject constructor(
-    http: OkHttpClient,
+    private val http: OkHttpClient,
 ) {
     private val downloader = OkHttpNewPipeDownloader(http)
 
@@ -47,38 +47,44 @@ class YouTubeStreamExtractor @Inject constructor(
         } catch (error: Exception) {
             throw IOException("YouTube stream extraction failed for $videoId", error)
         }
-        val stream = run {
-            if (preferOpus) {
-                info.audioStreams
-                    .filter {
-                        it.format?.mimeType?.contains("webm") == true ||
-                            it.codec?.contains("opus", ignoreCase = true) == true
-                    }
-                    .maxByOrNull { maxOf(it.averageBitrate, it.bitrate) }
-                    ?: info.audioStreams.maxByOrNull { maxOf(it.averageBitrate, it.bitrate) }
-            } else if (preferM4a) {
-                info.audioStreams
-                    .filter { it.format?.mimeType?.contains("mp4") == true || it.format?.mimeType?.contains("m4a") == true }
-                    .maxByOrNull { maxOf(it.averageBitrate, it.bitrate) }
-                    ?: info.audioStreams.maxByOrNull { maxOf(it.averageBitrate, it.bitrate) }
-            } else {
-                info.audioStreams.maxByOrNull { maxOf(it.averageBitrate, it.bitrate) }
-            }
-        } ?: throw IOException("YouTube returned no playable audio stream for $videoId")
-        val reportedBitrate = maxOf(stream.averageBitrate, stream.bitrate)
-        val result = YouTubeAudioStream(
+        val ordered = info.audioStreams.sortedWith(
+            compareBy<org.schabi.newpipe.extractor.stream.AudioStream> { audioPreference(it, preferM4a, preferOpus) }
+                .thenByDescending { maxOf(it.averageBitrate, it.bitrate) },
+        )
+        if (ordered.isEmpty()) throw IOException("YouTube returned no playable audio stream for $videoId")
+        val candidates = ordered.map { stream ->
+            stream.toYouTubeAudioStream(videoId, info.duration, now)
+        }
+        val playable = selectProbedCandidate(
+            candidates = candidates,
+            urlOf = { it.url },
+            probe = ::probePlayable,
+            limit = MAX_PROBED_AUDIO_STREAMS,
+        )
+        if (playable != null) return@withContext playable
+        invalidatePlayerState(videoId)
+        throw IOException("YouTube audio URLs were rejected for $videoId")
+    }
+
+    private fun org.schabi.newpipe.extractor.stream.AudioStream.toYouTubeAudioStream(
+        videoId: String,
+        durationSeconds: Long,
+        now: Long,
+    ): YouTubeAudioStream {
+        val reportedBitrate = maxOf(averageBitrate, bitrate)
+        return YouTubeAudioStream(
             videoId = videoId,
-            url = stream.content,
-            itag = stream.itag.takeIf { it >= 0 },
-            mimeType = stream.format?.mimeType,
-            codec = stream.codec?.takeIf(String::isNotBlank),
+            url = content,
+            itag = itag.takeIf { it >= 0 },
+            mimeType = format?.mimeType,
+            codec = codec?.takeIf(String::isNotBlank),
             // NewPipe reports kbps while raw InnerTube formats report bps;
             // normalize both providers to bps for one truthful UI value.
             bitrate = if (reportedBitrate in 1..9_999) reportedBitrate * 1_000 else reportedBitrate,
-            sampleRateHz = stream.itagItem?.sampleRate?.takeIf { it > 0 },
-            durationMs = stream.itagItem?.approxDurationMs?.takeIf { it > 0 }
-                ?: info.duration.takeIf { it > 0 }?.times(1_000L),
-            contentLength = stream.itagItem?.contentLength?.takeIf { it > 0 },
+            sampleRateHz = itagItem?.sampleRate?.takeIf { it > 0 },
+            durationMs = itagItem?.approxDurationMs?.takeIf { it > 0 }
+                ?: durationSeconds.takeIf { it > 0 }?.times(1_000L),
+            contentLength = itagItem?.contentLength?.takeIf { it > 0 },
             isAdaptive = true,
             clientProfile = NEWPIPE_CLIENT_PROFILE,
             authScope = ANONYMOUS_AUTH_SCOPE,
@@ -87,13 +93,49 @@ class YouTubeStreamExtractor @Inject constructor(
                 "Origin" to YOUTUBE_ORIGIN,
                 "Referer" to "$YOUTUBE_ORIGIN/watch?v=$videoId",
             ),
-            expiresAtEpochMs = stream.content.toHttpUrlOrNull()
+            expiresAtEpochMs = content.toHttpUrlOrNull()
                 ?.queryParameter("expire")
                 ?.toLongOrNull()
                 ?.times(1_000L)
                 ?: now + UNKNOWN_EXPIRY_TTL_MS,
         )
-        result
+    }
+
+    private fun audioPreference(
+        stream: org.schabi.newpipe.extractor.stream.AudioStream,
+        preferM4a: Boolean,
+        preferOpus: Boolean,
+    ): Int {
+        val mime = stream.format?.mimeType.orEmpty().lowercase()
+        val opus = mime.contains("webm") || stream.codec?.contains("opus", ignoreCase = true) == true
+        val m4a = mime.contains("mp4") || mime.contains("m4a")
+        return when {
+            preferOpus && opus -> 0
+            preferM4a && m4a -> 0
+            stream.itag == 140 || m4a -> 1
+            stream.itag == 251 || opus -> 2
+            else -> 3
+        }
+    }
+
+    /**
+     * Opens the URL the way ExoPlayer does: no two-byte range. A 206 for
+     * `bytes=0-1` is not evidence the player can read the stream. The body
+     * is closed as soon as the status line is known.
+     */
+    private fun probePlayable(stream: YouTubeAudioStream): Boolean {
+        val request = playbackProbeRequest(stream.url, stream.requestHeaders)
+        val call = http.newCall(request)
+        call.timeout().timeout(PROBE_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+        return try {
+            call.execute().use { response ->
+                acceptsPlaybackProbe(response.code, response.header("Content-Type").orEmpty())
+            }
+        } catch (cancellation: kotlinx.coroutines.CancellationException) {
+            throw cancellation
+        } catch (_: Exception) {
+            false
+        }
     }
 
     suspend fun getSignatureTimestamp(videoId: String): Int? = withContext(Dispatchers.IO) {
@@ -170,12 +212,57 @@ class YouTubeStreamExtractor @Inject constructor(
 
     companion object {
         private const val UNKNOWN_EXPIRY_TTL_MS = 5 * 60 * 1000L
+        private const val MAX_PROBED_AUDIO_STREAMS = 4
+        private const val PROBE_TIMEOUT_MS = 1_500L
         private const val NEWPIPE_CLIENT_PROFILE = "NEWPIPE"
         private const val ANONYMOUS_AUTH_SCOPE = "anonymous"
     }
 }
 
 internal const val YOUTUBE_ORIGIN = "https://www.youtube.com"
+
+/** Same Accept headers as the player's [androidx.media3.datasource.DefaultHttpDataSource]. No two-byte Range. */
+internal fun playbackProbeRequest(url: String, headers: Map<String, String>): okhttp3.Request =
+    okhttp3.Request.Builder()
+        .url(url)
+        .header("Accept", "audio/*,*/*;q=0.8")
+        .header("Accept-Encoding", "identity")
+        .apply {
+            headers.forEach { (name, value) -> header(name, value) }
+        }
+        .build()
+
+/** HTTP 403 and 410 are not playable. A tiny 206 is only accepted when the open itself succeeded. */
+internal fun acceptsPlaybackProbe(code: Int, contentType: String): Boolean {
+    if (code == 403 || code == 410) return false
+    val type = contentType.lowercase()
+    val playableType = !type.contains("text/html") &&
+        !type.contains("application/json") &&
+        !type.contains("text/plain")
+    return (code == 200 || code == 206) && playableType
+}
+
+/**
+ * Probes at most [limit] distinct URLs. A failed candidate is not retried.
+ * [probe] may throw [kotlinx.coroutines.CancellationException].
+ */
+internal fun <T> selectProbedCandidate(
+    candidates: List<T>,
+    urlOf: (T) -> String,
+    probe: (T) -> Boolean,
+    limit: Int,
+): T? {
+    val seen = HashSet<String>()
+    var probed = 0
+    for (candidate in candidates) {
+        if (probed >= limit) break
+        val url = urlOf(candidate)
+        if (url.isBlank() || !seen.add(url)) continue
+        probed++
+        if (probe(candidate)) return candidate
+    }
+    return null
+}
 
 private class OkHttpNewPipeDownloader(
     private val http: OkHttpClient,

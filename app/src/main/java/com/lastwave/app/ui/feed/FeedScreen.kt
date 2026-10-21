@@ -1,5 +1,6 @@
 package com.lastwave.app.ui.feed
 
+import com.lastwave.app.playback.toPlayableTrack
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -56,6 +57,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material.icons.filled.Whatshot
 import androidx.compose.material3.Button
@@ -91,8 +93,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
+import com.lastwave.app.R
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -131,6 +136,7 @@ import com.lastwave.app.ui.navigation.ArtistAlbumNavigator
 import com.lastwave.app.ui.player.LocalMusicPlayer
 import com.lastwave.app.ui.player.PlayingWaveBars
 import com.lastwave.app.ui.shell.FloatingNavDefaults
+import com.lastwave.app.ui.podcast.PodcastShowRow
 
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
@@ -146,10 +152,13 @@ fun FeedScreen(
     onOpenDownloads: () -> Unit = {},
     onOpenFriendProfile: (username: String, displayName: String?, avatarUrl: String?) -> Unit = { _, _, _ -> },
     onOpenNewReleases: () -> Unit = {},
+    onOpenPodcasts: () -> Unit = {},
+    onOpenPodcastShow: (String) -> Unit = {},
     viewModel: FeedViewModel = hiltViewModel(),
     artistAlbumNavigator: ArtistAlbumNavigator = hiltViewModel<ArtistAlbumNavBridgeFeed>().navigator,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val discoveryTracks by viewModel.discoveryTracks.collectAsStateWithLifecycle()
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, viewModel) {
         val observer = LifecycleEventObserver { _, event ->
@@ -159,12 +168,14 @@ fun FeedScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     val musicPlayer = LocalMusicPlayer.current
+    val context = LocalContext.current
     val playbackState by musicPlayer.chromeState.collectAsStateWithLifecycle()
     var menuTrack by remember { mutableStateOf<YouTubeMusicTrack?>(null) }
     // Long-press (deep press) mini tray — 3-dot buttons keep the full sheet.
     var miniTrayTrack by remember { mutableStateOf<TrackMiniTrayData?>(null) }
     // Sections hidden via Settings → Home sections.
     val hiddenSections by viewModel.hiddenHomeSections.collectAsStateWithLifecycle()
+    val podcastsEnabled by viewModel.podcastsEnabled.collectAsStateWithLifecycle()
     fun isSectionVisible(section: HomeSection) = section.id !in hiddenSections
     val snackbarHostState = remember { SnackbarHostState() }
     val hasFeedContent = with(state.feedData) {
@@ -172,14 +183,15 @@ fun FeedScreen(
             quickPicks.isNotEmpty() || jumpBackIn.isNotEmpty() || recentAlbums.isNotEmpty() ||
             heavyRotation.isNotEmpty() || ytLikedSongs.isNotEmpty() || ytRecentSongs.isNotEmpty() ||
             (becauseYouListenTo?.items?.isNotEmpty() == true) || freshFinds.isNotEmpty() ||
-            spotlight != null || charts.isNotEmpty() || newReleases.isNotEmpty() || friends.isNotEmpty()
+            spotlight != null || charts.isNotEmpty() || newReleases.isNotEmpty() || friends.isNotEmpty() ||
+            podcastShows.isNotEmpty()
     }
     val greeting = remember {
         when (java.time.LocalTime.now().hour) {
-            in 5..11 -> "Good morning"
-            in 12..16 -> "Good afternoon"
-            in 17..21 -> "Good evening"
-            else -> "Good night"
+            in 5..11 -> context.getString(R.string.feed_greeting_morning)
+            in 12..16 -> context.getString(R.string.feed_greeting_afternoon)
+            in 17..21 -> context.getString(R.string.feed_greeting_evening)
+            else -> context.getString(R.string.feed_greeting_night)
         }
     }
     val formattedDate = remember {
@@ -190,7 +202,7 @@ fun FeedScreen(
     LaunchedEffect(state.error, hasFeedContent) {
         val error = state.error ?: return@LaunchedEffect
         if (hasFeedContent) {
-            val result = snackbarHostState.showSnackbar(error, actionLabel = "Retry", withDismissAction = true)
+            val result = snackbarHostState.showSnackbar(error, actionLabel = context.getString(R.string.feed_retry), withDismissAction = true)
             viewModel.dismissError()
             if (result == SnackbarResult.ActionPerformed) viewModel.refresh()
         }
@@ -206,7 +218,7 @@ fun FeedScreen(
                 .adaptiveContentWidth(maxWidth = 920.dp),
         ) {
             ExpressiveHeader(
-                title = "Home",
+                title = stringResource(R.string.feed_home),
                 actions = {
                     HeaderActionIcon(Icons.Filled.Download, "Downloads", onOpenDownloads)
                     HeaderActionIcon(Icons.Filled.Search, "Search", onOpenSearch)
@@ -315,12 +327,23 @@ fun FeedScreen(
                                 color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.5f),
                             ) {
                                 Column(modifier = Modifier.padding(vertical = 12.dp)) {
-                            FeedSectionHeader(title = "Quick access")
+                            FeedSectionHeader(title = stringResource(R.string.feed_quick_access))
                                     Spacer(modifier = Modifier.height(12.dp))
                             QuickTilesGrid(
                                 tiles = quickTiles,
                                 onTileClick = { tile ->
                                     when {
+                                        tile.collection == "live_map" -> {
+                                            runCatching {
+                                                androidx.browser.customtabs.CustomTabsIntent.Builder().build()
+                                                    .launchUrl(context, android.net.Uri.parse("https://telemetry.clashprojects.qd.je"))
+                                            }.onFailure {
+                                                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://telemetry.clashprojects.qd.je")).apply {
+                                                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                }
+                                                runCatching { context.startActivity(intent) }
+                                            }
+                                        }
                                         tile.collection == "radio" -> onOpenDiscover()
                                         tile.collection == "discover_mix" -> {
                                             if (tile.playlistId != null) {
@@ -352,6 +375,26 @@ fun FeedScreen(
                         }
                     }
 
+                    if (podcastsEnabled && state.feedData.podcastShows.isNotEmpty()) {
+                        item(key = "podcast_shelf") {
+                            Column(Modifier.padding(vertical = 4.dp)) {
+                                FeedSectionHeader(
+                                    title = state.feedData.podcastShelfTitle
+                                        ?.takeIf { it.isNotBlank() }
+                                        ?: stringResource(R.string.podcasts_title),
+                                    actionText = stringResource(R.string.podcasts_see_all),
+                                    actionIcon = Icons.AutoMirrored.Filled.ArrowForwardIos,
+                                    onActionClick = onOpenPodcasts,
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                PodcastShowRow(
+                                    shows = state.feedData.podcastShows,
+                                    onShowClick = { show -> onOpenPodcastShow(show.showId) },
+                                )
+                            }
+                        }
+                    }
+
                     // 3. "Your Sound" Section - ALWAYS visible below Quick Access
                     val displayTags = state.feedData.tasteTags.ifEmpty {
                         listOf("Rock", "Indie", "Pop", "Electronic", "Hip-Hop", "R&B", "Synthwave", "Alternative")
@@ -372,18 +415,18 @@ fun FeedScreen(
                                 color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.5f),
                             ) {
                                 Column(modifier = Modifier.padding(vertical = 12.dp)) {
-                            val title = if (state.feedData.hasYtRecommendations) "Picked for you" else "Quick picks"
+                            val title = if (state.feedData.hasYtRecommendations) stringResource(R.string.feed_picked_you) else stringResource(R.string.feed_quick_picks)
                             val subtitle = if (state.feedData.hasYtRecommendations) {
-                                "From your listening - refreshed for you"
+                                stringResource(R.string.feed_from_listening)
                             } else if (state.feedData.hasPersonalContent) {
-                                "Matched to your taste profile"
+                                stringResource(R.string.feed_matched_taste)
                             } else {
-                                "Trending songs worth playing now"
+                                stringResource(R.string.feed_trending_worth)
                             }
                             FeedSectionHeader(
                                 title = title,
                                 subtitle = subtitle,
-                                actionText = "Play all",
+                                actionText = stringResource(R.string.feed_play_all),
                                 actionIcon = Icons.Filled.PlayArrow,
                                 onActionClick = { viewModel.playTracksQueue(state.feedData.quickPicks, 0, "Quick Picks") },
                                 onShuffleClick = { viewModel.shuffleTracksQueue(state.feedData.quickPicks, "Quick Picks") },
@@ -392,7 +435,14 @@ fun FeedScreen(
                                 tracks = state.feedData.quickPicks,
                                 currentPlayingVideoId = playbackState.current?.videoId,
                                 isPlaying = playbackState.isPlaying,
-                                onTrackClick = { index -> viewModel.playTracksQueue(state.feedData.quickPicks, index, "Quick Picks") },
+                                onTrackClick = { index ->
+                                    val track = state.feedData.quickPicks.getOrNull(index)
+                                    if (track != null) {
+                                        viewModel.playTrack(track, "Quick Picks")
+                                    } else {
+                                        viewModel.playTracksQueue(state.feedData.quickPicks, index, "Quick Picks")
+                                    }
+                                },
                                 onMenuClick = { menuTrack = it },
                                 onLongClick = { track, index ->
                                     miniTrayTrack = TrackMiniTrayData(
@@ -402,11 +452,53 @@ fun FeedScreen(
                                         artworkUrl = track.artworkUrl,
                                         videoId = track.videoId.takeIf(String::isNotBlank),
                                         sourceLabel = "Home",
-                                        onPlay = { viewModel.playTracksQueue(state.feedData.quickPicks, index, "Quick Picks") },
+                                        onPlay = { viewModel.playTrack(track, "Quick Picks") },
                                     )
                                 },
                             )
                         
+                                }
+                            }
+                        }
+                    }
+
+                    if (discoveryTracks.isNotEmpty()) {
+                        item(key = "discover_new_music") {
+                            Surface(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                                shape = RoundedCornerShape(24.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.5f),
+                            ) {
+                                Column(modifier = Modifier.padding(vertical = 12.dp)) {
+                                    FeedSectionHeader(
+                                        title = stringResource(R.string.feed_discover),
+                                        subtitle = stringResource(R.string.feed_discover_sub),
+                                        actionText = stringResource(R.string.feed_see_all),
+                                        actionIcon = Icons.AutoMirrored.Filled.ArrowForwardIos,
+                                        onActionClick = onOpenDiscover,
+                                    )
+                                    FeedMediaRow(
+                                        content = {
+                                            itemsIndexed(discoveryTracks) { index, track ->
+                                                val playable = track.toPlayableTrack()
+                                                FeedMediaCard(
+                                                    title = track.name,
+                                                    subtitle = ArtistHelper.primaryArtist(track.artist),
+                                                    artworkUrl = track.artworkUrl,
+                                                    fallbackIcon = Icons.Filled.Explore,
+                                                    badgeText = "DISCOVER",
+                                                    onClick = {
+                                                        val queue = discoveryTracks.map { it.toPlayableTrack() }
+                                                        musicPlayer.playDiscoverQueue(queue, index)
+                                                    },
+                                                    onPlayClick = {
+                                                        val queue = discoveryTracks.map { it.toPlayableTrack() }
+                                                        musicPlayer.playDiscoverQueue(queue, index)
+                                                    },
+                                                )
+                                            }
+                                        },
+                                    )
                                 }
                             }
                         }
@@ -424,7 +516,7 @@ fun FeedScreen(
                             FeedSectionHeader(
                                 title = section.title,
                                 subtitle = section.subtitle,
-                                actionText = "Play all",
+                                actionText = stringResource(R.string.feed_play_all),
                                 actionIcon = Icons.Filled.PlayArrow,
                                 onActionClick = { viewModel.playTracksQueue(section.items, 0, section.title) },
                                 onShuffleClick = { viewModel.shuffleTracksQueue(section.items, section.title) },
@@ -437,7 +529,7 @@ fun FeedScreen(
                                             subtitle = ArtistHelper.primaryArtist(track.artist),
                                             artworkUrl = track.artworkUrl,
                                             fallbackIcon = Icons.Filled.MusicNote,
-                                            onClick = { viewModel.playTracksQueue(section.items, index, section.title) },
+                                            onClick = { viewModel.playTrack(track, section.title) },
                                             onLongClick = {
                                                 miniTrayTrack = TrackMiniTrayData(
                                                     title = track.title,
@@ -446,10 +538,10 @@ fun FeedScreen(
                                                     artworkUrl = track.artworkUrl,
                                                     videoId = track.videoId.takeIf(String::isNotBlank),
                                                     sourceLabel = "Home",
-                                                    onPlay = { viewModel.playTracksQueue(section.items, index, section.title) },
+                                                    onPlay = { viewModel.playTrack(track, section.title) },
                                                 )
                                             },
-                                            onPlayClick = { viewModel.playTracksQueue(section.items, index, section.title) },
+                                            onPlayClick = { viewModel.playTrack(track, section.title) },
                                         )
                                     }
                                 },
@@ -470,9 +562,9 @@ fun FeedScreen(
                             ) {
                                 Column(modifier = Modifier.padding(vertical = 12.dp)) {
                                     FeedSectionHeader(
-                                        title = "Fresh finds",
-                                        subtitle = "New tracks beyond your usual rotation",
-                                        actionText = "Play all",
+                                        title = stringResource(R.string.feed_fresh),
+                                        subtitle = stringResource(R.string.feed_fresh_sub),
+                                        actionText = stringResource(R.string.feed_play_all),
                                         actionIcon = Icons.Filled.PlayArrow,
                                         onActionClick = { viewModel.playTracksQueue(state.feedData.freshFinds, 0, "Fresh Finds") },
                                         onShuffleClick = { viewModel.shuffleTracksQueue(state.feedData.freshFinds, "Fresh Finds") },
@@ -494,11 +586,11 @@ fun FeedScreen(
                                                             artworkUrl = track.artworkUrl,
                                                             videoId = track.videoId.takeIf(String::isNotBlank),
                                                             sourceLabel = "Home",
-                                                            onPlay = { viewModel.playTracksQueue(state.feedData.freshFinds, index, "Fresh Finds") },
+                                                            onPlay = { viewModel.playTrack(track, "Fresh Finds") },
                                                         )
                                                     },
-                                                    onClick = { viewModel.playTracksQueue(state.feedData.freshFinds, index, "Fresh Finds") },
-                                                    onPlayClick = { viewModel.playTracksQueue(state.feedData.freshFinds, index, "Fresh Finds") },
+                                                    onClick = { viewModel.playTrack(track, "Fresh Finds") },
+                                                    onPlayClick = { viewModel.playTrack(track, "Fresh Finds") },
                                                 )
                                             }
                                         },
@@ -517,9 +609,9 @@ fun FeedScreen(
                             ) {
                                 Column(modifier = Modifier.padding(vertical = 12.dp)) {
                             FeedSectionHeader(
-                                title = "Jump back in",
-                                subtitle = "From your listening history",
-                                actionText = "Play all",
+                                title = stringResource(R.string.feed_jump),
+                                subtitle = stringResource(R.string.feed_jump_sub),
+                                actionText = stringResource(R.string.feed_play_all),
                                 actionIcon = Icons.Filled.PlayArrow,
                                 onActionClick = { viewModel.playRecentQueue(state.feedData.jumpBackIn, 0) },
                             )
@@ -557,9 +649,9 @@ fun FeedScreen(
                             ) {
                                 Column(modifier = Modifier.padding(vertical = 12.dp)) {
                             FeedSectionHeader(
-                                title = "Mixes to explore",
-                                subtitle = "Familiar favorites, fresh combinations",
-                                actionText = "Shuffle",
+                                title = stringResource(R.string.feed_mixes),
+                                subtitle = stringResource(R.string.feed_mixes_sub),
+                                actionText = stringResource(R.string.feed_shuffle),
                                 actionIcon = Icons.Filled.Shuffle,
                                 onActionClick = {
                                     state.feedData.mixes.randomOrNull()?.let(viewModel::playMix)
@@ -570,7 +662,7 @@ fun FeedScreen(
                                     items(state.feedData.mixes, key = { it.seed.videoId }) { mix ->
                                         FeedPlaylistCard(
                                             title = mix.title,
-                                            subtitle = "Endless artist radio",
+                                            subtitle = stringResource(R.string.feed_endless_radio),
                                             artworkUrl = mix.seed.artworkUrl,
                                             onClick = { viewModel.playMix(mix) },
                                             onPlayClick = { viewModel.playMix(mix) },
@@ -609,8 +701,8 @@ fun FeedScreen(
                             ) {
                                 Column(modifier = Modifier.padding(vertical = 12.dp)) {
                             FeedSectionHeader(
-                                    title = "Artists for you",
-                                    subtitle = "Worth another listen",
+                                    title = stringResource(R.string.feed_artists),
+                                    subtitle = stringResource(R.string.feed_artists_sub),
                                 )
                                 LazyRow(
                                     contentPadding = PaddingValues(horizontal = 16.dp),
@@ -645,9 +737,9 @@ fun FeedScreen(
                             ) {
                                 Column(modifier = Modifier.padding(vertical = 12.dp)) {
                             FeedSectionHeader(
-                                title = "Favorites to revisit",
-                                subtitle = "From your listening profile",
-                                actionText = "Play all",
+                                title = stringResource(R.string.feed_favorites),
+                                subtitle = stringResource(R.string.feed_favorites_sub),
+                                actionText = stringResource(R.string.feed_play_all),
                                 actionIcon = Icons.Filled.PlayArrow,
                                 onActionClick = { viewModel.playGeneratedQueue(state.feedData.heavyRotation, 0, "Heavy Rotation") },
                             )
@@ -689,8 +781,8 @@ fun FeedScreen(
                             ) {
                                 Column(modifier = Modifier.padding(vertical = 12.dp)) {
                             FeedSectionHeader(
-                                title = "Albums for you",
-                                subtitle = "Real albums from your taste — Last.fm tops + YT Music picks",
+                                title = stringResource(R.string.feed_albums),
+                                subtitle = stringResource(R.string.feed_albums_sub),
                             )
                             FeedMediaRow(
                                 content = {
@@ -726,9 +818,9 @@ fun FeedScreen(
                             ) {
                                 Column(modifier = Modifier.padding(vertical = 12.dp)) {
                             FeedSectionHeader(
-                                title = "Trending now",
-                                subtitle = "Most popular right now · tap a rank to play",
-                                actionText = "Play all",
+                                title = stringResource(R.string.feed_trending),
+                                subtitle = stringResource(R.string.feed_trending_sub),
+                                actionText = stringResource(R.string.feed_play_all),
                                 actionIcon = Icons.Filled.PlayArrow,
                                 onActionClick = { viewModel.playTracksQueue(state.feedData.charts, 0, "Top Charts") },
                                 onShuffleClick = { viewModel.shuffleTracksQueue(state.feedData.charts, "Top Charts") },
@@ -742,7 +834,7 @@ fun FeedScreen(
                                     ChartTrackCard(
                                         rank = index + 1,
                                         track = track,
-                                        onClick = { viewModel.playTracksQueue(state.feedData.charts, index, "Top Charts") },
+                                        onClick = { viewModel.playTrack(track, "Top Charts") },
                                         onLongClick = {
                                             miniTrayTrack = TrackMiniTrayData(
                                                 title = track.title,
@@ -751,7 +843,7 @@ fun FeedScreen(
                                                 artworkUrl = track.artworkUrl,
                                                 videoId = track.videoId.takeIf(String::isNotBlank),
                                                 sourceLabel = "Home",
-                                                onPlay = { viewModel.playTracksQueue(state.feedData.charts, index, "Top Charts") },
+                                                onPlay = { viewModel.playTrack(track, "Top Charts") },
                                             )
                                         },
                                     )
@@ -772,9 +864,9 @@ fun FeedScreen(
                             ) {
                                 Column(modifier = Modifier.padding(vertical = 12.dp)) {
                             FeedSectionHeader(
-                                title = "New releases",
-                                subtitle = "Fresh drops and new albums",
-                                actionText = "See all",
+                                title = stringResource(R.string.feed_releases),
+                                subtitle = stringResource(R.string.feed_releases_sub),
+                                actionText = stringResource(R.string.feed_see_all),
                                 actionIcon = Icons.AutoMirrored.Filled.ArrowForwardIos,
                                 onActionClick = onOpenNewReleases,
                             )
@@ -813,9 +905,9 @@ fun FeedScreen(
                             ) {
                                 Column(modifier = Modifier.padding(vertical = 12.dp)) {
                             FeedSectionHeader(
-                                title = "Your friends",
-                                subtitle = "People in your listening circle",
-                                actionText = "See all",
+                                title = stringResource(R.string.feed_friends),
+                                subtitle = stringResource(R.string.feed_friends_sub),
+                                actionText = stringResource(R.string.feed_see_all),
                                 actionIcon = Icons.AutoMirrored.Filled.ArrowForwardIos,
                                 onActionClick = onOpenFriends,
                             )
@@ -885,16 +977,16 @@ private fun String.displayName(): String =
         it.replaceFirstChar { c -> c.uppercase() }
     }
 
-private fun relativeTime(uts: String?): String? {
+private fun relativeTime(context: android.content.Context, uts: String?): String? {
     val epoch = uts?.toLongOrNull() ?: return null
     val now = System.currentTimeMillis() / 1000
     val diff = (now - epoch).coerceAtLeast(0)
     return when {
-        diff < 3600 -> "${(diff / 60).coerceAtLeast(1)}m ago"
-        diff < 86400 -> "${diff / 3600}h ago"
-        diff < 86400 * 7 -> "${diff / 86400}d ago"
-        diff < 86400 * 30 -> "${diff / (86400 * 7)}w ago"
-        else -> "${diff / (86400 * 30)}mo ago"
+        diff < 3600 -> context.getString(R.string.feed_ago_min, (diff / 60).coerceAtLeast(1).toInt())
+        diff < 86400 -> context.getString(R.string.feed_ago_hour, (diff / 3600).toInt())
+        diff < 86400 * 7 -> context.getString(R.string.feed_ago_day, (diff / 86400).toInt())
+        diff < 86400 * 30 -> context.getString(R.string.feed_ago_week, (diff / (86400 * 7)).toInt())
+        else -> context.getString(R.string.feed_ago_month, (diff / (86400 * 30)).toInt())
     }
 }
 
@@ -1012,7 +1104,7 @@ private fun InfiniteRadioHero(
                     ) {
                         Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("Play", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+                        Text(stringResource(R.string.feed_play_cd), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -1028,8 +1120,8 @@ private fun TasteStrip(
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         FeedSectionHeader(
-            title = "Your Sound",
-            subtitle = "Tap a vibe to start instant radio",
+            title = stringResource(R.string.feed_your_sound),
+            subtitle = stringResource(R.string.feed_your_sound_sub),
         )
         LazyRow(
             contentPadding = PaddingValues(horizontal = 16.dp),
@@ -1068,7 +1160,7 @@ private fun TasteStrip(
                         if (isLoading) {
                             Icon(
                                 Icons.Filled.Refresh,
-                                contentDescription = "Starting radio",
+                                contentDescription = stringResource(R.string.feed_start_radio_cd),
                                 tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(14.dp),
                             )
@@ -1167,15 +1259,16 @@ private fun FeedLoadingSkeleton() {
 
 @Composable
 private fun FeedFooter(lastUpdatedMillis: Long) {
+    val context = LocalContext.current
     val label = remember(lastUpdatedMillis) {
-        if (lastUpdatedMillis <= 0L) "Made for you from your taste"
+        if (lastUpdatedMillis <= 0L) context.getString(R.string.feed_footer_default)
         else try {
             val time = java.time.Instant.ofEpochMilli(lastUpdatedMillis)
                 .atZone(java.time.ZoneId.systemDefault())
                 .format(java.time.format.DateTimeFormatter.ofPattern("h:mm a"))
-            "Updated $time · Made for you from your taste"
+            context.getString(R.string.feed_footer_updated, time)
         } catch (_: Exception) {
-            "Made for you from your taste"
+            context.getString(R.string.feed_footer_default)
         }
     }
     Box(
@@ -1223,6 +1316,7 @@ private fun QuickTileCard(
     val tileShape = RoundedCornerShape(18.dp)
 
     // Per-type vibrant gradient pairs for the artwork/icon box matching modern expressive designs
+    val isLiveMapTile = tile.collection == "live_map"
     val isYtLikedTile = tile.collection == "yt_liked" || tile.playlistId == "yt_liked"
     val isLocalLikedTile = tile.isLiked && !isYtLikedTile
     val isLikedTile = isYtLikedTile || isLocalLikedTile
@@ -1232,6 +1326,9 @@ private fun QuickTileCard(
     val isNewReleasesTile = tile.collection == "new_releases"
 
     val iconGradient = when {
+        isLiveMapTile -> Brush.linearGradient(
+            colors = listOf(MaterialTheme.colorScheme.tertiaryContainer, MaterialTheme.colorScheme.tertiary),
+        )
         isLikedTile -> Brush.linearGradient(
             colors = listOf(MaterialTheme.colorScheme.primaryContainer, MaterialTheme.colorScheme.primary),
         )
@@ -1259,6 +1356,7 @@ private fun QuickTileCard(
         onClick = onClick,
         shape = tileShape,
         color = when {
+            isLiveMapTile -> MaterialTheme.colorScheme.tertiaryContainer
             isLikedTile -> MaterialTheme.colorScheme.primaryContainer
             isMixTile -> MaterialTheme.colorScheme.secondaryContainer
             isMyMixTile -> MaterialTheme.colorScheme.surfaceVariant
@@ -1287,7 +1385,14 @@ private fun QuickTileCard(
                     .background(iconGradient),
                 contentAlignment = Alignment.Center,
             ) {
-                if (isYtLikedTile) {
+                if (isLiveMapTile) {
+                    Icon(
+                        Icons.Filled.Public,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                        modifier = Modifier.size(36.dp),
+                    )
+                } else if (isYtLikedTile) {
                     Icon(
                         Icons.Filled.ThumbUp,
                         contentDescription = null,
@@ -1470,7 +1575,7 @@ private fun QuickPicksRows(
                             ) {
                                 Icon(
                                     Icons.Filled.MoreVert,
-                                    contentDescription = "More options for ${track.title}",
+                                    contentDescription = stringResource(R.string.feed_more_cd, track.title),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                                     modifier = Modifier.size(20.dp),
                                 )
@@ -1584,7 +1689,7 @@ private fun FeedMediaCard(
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Icon(
                             Icons.Filled.PlayArrow,
-                            contentDescription = "Play $title",
+                            contentDescription = stringResource(R.string.feed_play_title_cd, title),
                             tint = MaterialTheme.colorScheme.onPrimaryContainer,
                             modifier = Modifier.size(20.dp),
                         )
@@ -1643,7 +1748,8 @@ private fun RecentTrackCard(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
 ) {
-    val ago = remember(track.date?.uts, track.url) { relativeTime(track.date?.uts) }
+    val context = LocalContext.current
+    val ago = remember(track.date?.uts, track.url) { relativeTime(context, track.date?.uts) }
     val primaryArtistName = remember(track.artist.displayName) { ArtistHelper.primaryArtist(track.artist.displayName) }
     val subtitle = if (ago != null) "$primaryArtistName · $ago" else primaryArtistName
     val haptics = LocalHapticFeedback.current
@@ -1903,7 +2009,7 @@ private fun SpotlightHeroCard(
                         if (!spotlight.artworkUrl.isNullOrBlank()) {
                             AsyncImage(
                                 model = spotlight.artworkUrl,
-                                contentDescription = "Open $primaryArtistName",
+                                contentDescription = stringResource(R.string.feed_open_artist_cd, primaryArtistName),
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize(),
                             )
@@ -1970,7 +2076,7 @@ private fun SpotlightHeroCard(
                     ) {
                         Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text("Artist radio", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(R.string.feed_artist_radio), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
                     }
                     Surface(
                         onClick = onOpenArtist,
@@ -2202,7 +2308,7 @@ private fun FeedSectionHeader(
                 ) {
                     Icon(
                         Icons.Filled.Shuffle,
-                        contentDescription = "Shuffle $title",
+                        contentDescription = stringResource(R.string.feed_shuffle_title_cd, title),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(16.dp),
                     )
@@ -2301,7 +2407,7 @@ private fun FeedEmptyState(
             ) {
                 Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("Search music", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.feed_search_music), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
             }
             Surface(
                 onClick = onRetry,

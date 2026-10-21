@@ -2,9 +2,12 @@ package com.lastwave.app.data.playlist
 
 import android.content.Context
 import android.os.Build
+import com.lastwave.app.data.canvas.SpotifyCanvas
 import com.lastwave.app.data.generate.GeneratedTrack
 import com.lastwave.app.data.generate.distinctSongs
 import com.lastwave.app.data.generate.sameSongAs
+import com.lastwave.app.data.spotify.SpotifyAuthRepository
+import com.lastwave.app.data.spotify.SpotifyPreferences
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -24,6 +27,9 @@ class LikedSongsManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val playlistRepository: PlaylistRepository,
     private val applicationScope: CoroutineScope,
+    private val spotifyPreferences: SpotifyPreferences,
+    private val spotifyAuthRepository: SpotifyAuthRepository,
+    private val spotifyCanvas: SpotifyCanvas,
 ) {
     private val mutationMutex = Mutex()
     private val _likedTrackKeys = MutableStateFlow<Set<String>>(emptySet())
@@ -42,6 +48,15 @@ class LikedSongsManager @Inject constructor(
                 runCatching { dedupe() }
                     .onSuccess { removed ->
                         if (removed > 0) android.util.Log.i("LikedSongsManager", "Healed $removed duplicate liked tracks")
+                    }
+                // Older builds could bootstrap a second Liked Songs row when
+                // a playlist read briefly failed; each duplicate row then
+                // mirrored as its own YouTube playlist. Merge them into the
+                // one with the most tracks and delete the leftovers — the
+                // next sync pass sweeps their remote mirrors as orphans.
+                runCatching { collapseDuplicateLikedRows() }
+                    .onSuccess { removed ->
+                        if (removed > 0) android.util.Log.i("LikedSongsManager", "Collapsed $removed duplicate liked playlists")
                     }
                 playlistRepository.changes.collect { refresh() }
             } catch (cancellation: CancellationException) {
@@ -68,12 +83,14 @@ class LikedSongsManager @Inject constructor(
                 existing.tracks.filterNot { it.sameSongAs(track) },
             )
             refresh()
+            syncToSpotify(track, like = false)
             false
         } else {
             // Deletion is respected until the next actual Like action.
             val playlist = existing ?: playlistRepository.ensureLikedSongs()
             playlistRepository.replaceTracksForSync(playlist.id, (playlist.tracks + track).distinctSongs())
             refresh()
+            syncToSpotify(track, like = true)
             true
         }
     }
@@ -85,7 +102,33 @@ class LikedSongsManager @Inject constructor(
         val playlist = existing ?: playlistRepository.ensureLikedSongs()
         playlistRepository.replaceTracksForSync(playlist.id, (playlist.tracks + track).distinctSongs())
         refresh()
+        syncToSpotify(track, like = true)
         true
+    }
+
+    private fun syncToSpotify(track: GeneratedTrack, like: Boolean) {
+        applicationScope.launch(Dispatchers.IO) {
+            try {
+                if (!spotifyPreferences.isSyncLikedSongsEnabled()) return@launch
+                val personalToken = spotifyAuthRepository.getPersonalToken() ?: return@launch
+                val clientToken = spotifyAuthRepository.getClientToken() ?: return@launch
+                val spotifyTrack = spotifyCanvas.searchTrack(
+                    personalToken = personalToken,
+                    clientToken = clientToken,
+                    title = track.name,
+                    artist = track.artist,
+                    durationMs = null,
+                ) ?: return@launch
+                val id = spotifyTrack.id ?: return@launch
+                if (like) {
+                    spotifyAuthRepository.saveTrackToLiked(id)
+                } else {
+                    spotifyAuthRepository.removeTrackFromLiked(id)
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("LikedSongsManager", "Failed to sync like/unlike to Spotify: ${e.message}")
+            }
+        }
     }
 
     /**
@@ -116,6 +159,33 @@ class LikedSongsManager @Inject constructor(
     }
 
     /**
+     * One-time heal: collapses duplicate `liked`-mode rows into the one with
+     * the most tracks, merging every removed row's songs into the keeper and
+     * deleting the leftovers. A duplicate row's remote mirror is then swept
+     * as an orphan by the next sync pass. Best-effort — never throws.
+     *
+     * @return number of duplicate playlists collapsed.
+     */
+    private suspend fun collapseDuplicateLikedRows(): Int = mutationMutex.withLock {
+        val liked = try {
+            playlistRepository.getAll().filter { it.mode == LIKED_SONGS_MODE }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Exception) {
+            android.util.Log.w("LikedSongsManager", "Duplicate liked-row heal skipped", error)
+            return@withLock 0
+        }
+        if (liked.size <= 1) return@withLock 0
+        val keeper = liked.maxBy { it.tracks.size }
+        val others = liked.filter { it.id != keeper.id }
+        val merged = (keeper.tracks + others.flatMap { it.tracks }).distinctSongs()
+        playlistRepository.replaceTracksForSync(keeper.id, merged, keeper.tracks)
+        others.forEach { duplicate -> playlistRepository.delete(duplicate.id) }
+        refresh()
+        others.size
+    }
+
+    /**
      * One-time heal: collapses pre-existing duplicates (same videoId or same
      * normalized title+artist) keeping the first occurrence. Best-effort —
      * never throws, so startup can safely invoke it.
@@ -139,7 +209,18 @@ class LikedSongsManager @Inject constructor(
     }
 
     private suspend fun refresh() {
-        _likedTrackKeys.value = playlistRepository.getLikedSongs()
+        // Runs after the mutation already landed: a failed read-back must
+        // neither fail the like nor blank the heart state, so keep the last
+        // known keys instead.
+        val liked = try {
+            playlistRepository.getLikedSongs()
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (error: Exception) {
+            android.util.Log.w("LikedSongsManager", "Liked Songs refresh failed", error)
+            return
+        }
+        _likedTrackKeys.value = liked
             ?.tracks
             ?.mapTo(mutableSetOf()) { it.key }
             .orEmpty()

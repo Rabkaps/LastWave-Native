@@ -9,6 +9,7 @@ import com.lastwave.app.data.naming.PlaylistNamer
 import com.lastwave.app.data.playlist.PlaylistRepository
 import com.lastwave.app.data.ytmusic.YtMusicAuthManager
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -65,16 +66,22 @@ class DiscoverViewModel @Inject constructor(
 
     fun loadInitial() {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, error = null, endReached = false) }
+            val cached = repository.allowedCachedFeed()
+            if (cached.isNotEmpty()) {
+                _uiState.update { it.copy(isLoading = false, error = null, tracks = cached) }
+            } else {
+                _uiState.update { it.copy(isLoading = true, error = null, endReached = false) }
+            }
             try {
-                val cached = repository.allowedCachedFeed()
                 val needed = (INITIAL_BATCH_SIZE - cached.size).coerceAtLeast(0)
                 val batch = if (needed > 0) repository.nextBatch(needed) else emptyList()
                 val feed = repository.getCachedFeed()
                 _uiState.update { it.copy(isLoading = false, tracks = feed) }
                 artworkRepository.enrichBatch((cached + batch).take(INITIAL_BATCH_SIZE).map { it.name to it.artist })
             } catch (e: Exception) {
-                _uiState.update { it.copy(isLoading = false, error = e.message ?: "Couldn't load recommendations") }
+                if (_uiState.value.tracks.isEmpty()) {
+                    _uiState.update { it.copy(isLoading = false, error = e.message ?: "Couldn't load recommendations") }
+                }
             }
         }
     }
@@ -128,16 +135,25 @@ class DiscoverViewModel @Inject constructor(
         val tracks = _uiState.value.tracks
         if (tracks.isEmpty()) return
         viewModelScope.launch {
-            val signature = playlistRepository.discoverSignature(tracks)
-            val existing = playlistRepository.findByDiscoverSignature(signature)
-            if (existing != null) {
-                _uiState.update { it.copy(saveResultMessage = "Already saved as \"${existing.title}\"") }
-                return@launch
+            // Every step here reads the playlist table. A failed read must
+            // surface as "try again" — save() aborts rather than lose its
+            // dedupe check, which used to stack a same-title sibling.
+            try {
+                val signature = playlistRepository.discoverSignature(tracks)
+                val existing = playlistRepository.findByDiscoverSignature(signature)
+                if (existing != null) {
+                    _uiState.update { it.copy(saveResultMessage = "Already saved as \"${existing.title}\"") }
+                    return@launch
+                }
+                val title = PlaylistNamer.generateUniqueName(playlistRepository.titles())
+                val subtitle = PlaylistNamer.subtitleFor("discover")
+                playlistRepository.save(title, subtitle, "discover", tracks, discoverSignature = signature)
+                _uiState.update { it.copy(saveResultMessage = "Saved as \"$title\"") }
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (e: Exception) {
+                _uiState.update { it.copy(saveResultMessage = "Couldn't save playlist. Try again.") }
             }
-            val title = PlaylistNamer.generateUniqueName(playlistRepository.titles())
-            val subtitle = PlaylistNamer.subtitleFor("discover")
-            playlistRepository.save(title, subtitle, "discover", tracks, discoverSignature = signature)
-            _uiState.update { it.copy(saveResultMessage = "Saved as \"$title\"") }
         }
     }
 

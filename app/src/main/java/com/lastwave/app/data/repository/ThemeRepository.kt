@@ -7,6 +7,7 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.ui.graphics.Color
 import com.lastwave.app.data.artwork.ArtworkNormalizer
 import com.lastwave.app.data.artwork.ArtworkRepository
+import com.lastwave.app.data.artwork.DeferredArtworkLookup
 import com.lastwave.app.data.local.AccentMode
 import com.lastwave.app.data.local.MiscSettings
 import com.lastwave.app.data.local.SettingsPreferences
@@ -48,7 +49,8 @@ data class ThemeUiState(
     /** Experimental liquid-glass materials (Settings → Experimental). When
      *  true, container roles in [colorScheme] are semi-translucent and the
      *  chrome surfaces get specular glass dressing. */
-    val liquidGlass: Boolean = false,
+    val liquidGlass: Boolean = true,
+    val md3NavBar: Boolean = false,
     /** True when the "Dynamic Now Playing" artwork override is currently
      *  driving the schemes. LastWaveTheme uses this so S+ system dynamic
      *  (wallpaper) only takes over when no now-playing color is active:
@@ -82,6 +84,23 @@ class ThemeRepository @Inject constructor(
      *  no artwork could be resolved from any provider, or extraction
      *  failed — see the init block below. */
     private val nowPlayingHex = MutableStateFlow<String?>(null)
+
+    private val deferredArtwork = DeferredArtworkLookup(
+        scope = applicationScope,
+        source = "theme",
+        hasMemoryHit = { key -> !artworkRepository.resolved.value[key].isNullOrBlank() },
+        resolve = { name, artist ->
+            try {
+                artworkRepository.resolve(name, artist)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (error: Exception) {
+                android.util.Log.w("ThemeRepository", "Artwork resolution unavailable", error)
+            } catch (error: LinkageError) {
+                android.util.Log.w("ThemeRepository", "Artwork resolution unsupported on this ROM", error)
+            }
+        },
+    )
 
     init {
         // Bug fix: this used to read RecentTrack.artworkUrl straight off the
@@ -232,21 +251,23 @@ class ThemeRepository @Inject constructor(
             accentColorHex = prefs.accentColor,
             useCustomFont = misc.useCustomFont,
             liquidGlass = isGlass,
+            md3NavBar = prefs.md3NavBar,
             isNowPlayingThemed = nowPlayingActive,
         )
     }.stateIn(
         applicationScope,
         SharingStarted.Eagerly,
         ThemeUiState(
-            darkColorScheme = Md3SchemeBuilder.buildDarkScheme("#E03030", false),
-            lightColorScheme = Md3SchemeBuilder.buildLightScheme("#E03030", false),
+            darkColorScheme = Md3SchemeBuilder.buildDarkScheme("#E03030", false, true),
+            lightColorScheme = Md3SchemeBuilder.buildLightScheme("#E03030", true),
             themeMode = ThemeMode.SYSTEM,
-            colorScheme = Md3SchemeBuilder.buildDarkScheme("#E03030", false),
+            colorScheme = Md3SchemeBuilder.buildDarkScheme("#E03030", false, true),
             amoled = false,
             mode = AccentMode.MANUAL,
             accentColorHex = "#E03030",
             useCustomFont = true,
-            liquidGlass = false,
+            liquidGlass = true,
+            md3NavBar = false,
         ),
     )
 
@@ -269,6 +290,8 @@ class ThemeRepository @Inject constructor(
     suspend fun setAmoled(enabled: Boolean) = themePreferences.setAmoled(enabled)
 
     suspend fun setLiquidGlass(enabled: Boolean) = themePreferences.setLiquidGlass(enabled)
+
+    suspend fun setMd3NavBar(enabled: Boolean) = themePreferences.setMd3NavBar(enabled)
 
     /** Turning this on used to just flip the DataStore flag and wait for
      *  Home's own poll loop to eventually call updateNowPlayingArtwork() —
@@ -311,22 +334,13 @@ class ThemeRepository @Inject constructor(
     fun updateNowPlayingArtwork(trackName: String?, artistName: String?) {
         if (trackName.isNullOrBlank() || artistName.isNullOrBlank()) {
             nowPlayingTrackKey.value = null
+            deferredArtwork.cancel()
             return
         }
         val key = ArtworkNormalizer.cacheKey(trackName, artistName)
         if (key == nowPlayingTrackKey.value) return
         nowPlayingTrackKey.value = key
-        applicationScope.launch {
-            try {
-                artworkRepository.resolve(trackName, artistName)
-            } catch (cancellation: CancellationException) {
-                throw cancellation
-            } catch (error: Exception) {
-                android.util.Log.w("ThemeRepository", "Artwork resolution unavailable", error)
-            } catch (error: LinkageError) {
-                android.util.Log.w("ThemeRepository", "Artwork resolution unsupported on this ROM", error)
-            }
-        }
+        deferredArtwork.request(trackName, artistName)
     }
 
     private fun Color.toHex(): String = "#%02X%02X%02X".format(

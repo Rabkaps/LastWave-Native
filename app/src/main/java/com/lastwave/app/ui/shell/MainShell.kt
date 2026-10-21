@@ -127,6 +127,7 @@ import com.kyant.backdrop.shadow.Shadow
 import kotlin.math.sign
 import com.lastwave.app.ui.theme.LocalIsDarkTheme
 import com.lastwave.app.ui.theme.LocalLiquidGlass
+import com.lastwave.app.ui.theme.LocalMd3NavBar
 import com.lastwave.app.ui.theme.LiquidGlassPreset
 import com.lastwave.app.ui.theme.liquidGlassChrome
 import com.lastwave.app.ui.theme.liquidGlassContainerColor
@@ -200,6 +201,8 @@ fun MainShell(
     onOpenGenerator: () -> Unit = {},
     onOpenNewReleases: () -> Unit = {},
     onOpenDownloads: () -> Unit = {},
+    onOpenPodcasts: () -> Unit = {},
+    onOpenPodcastShow: (String) -> Unit = {},
     mainShellViewModel: MainShellViewModel = hiltViewModel(),
 ) {
     val tabs = MainTab.entries
@@ -253,6 +256,8 @@ fun MainShell(
                         onOpenFriendProfile = onOpenFriendProfile,
                         onOpenNewReleases = onOpenNewReleases,
                         onOpenDownloads = onOpenDownloads,
+                        onOpenPodcasts = onOpenPodcasts,
+                        onOpenPodcastShow = onOpenPodcastShow,
                     )
                     MainTab.STATS -> HomeScreen(
                         onOpenSettings = onOpenSettings,
@@ -390,16 +395,40 @@ private fun FloatingNavBar(
     modifier: Modifier = Modifier,
 ) {
     val liquidGlass = LocalLiquidGlass.current
+    val md3NavBar = LocalMd3NavBar.current
     val glassHoverIndex = remember(liquidGlass) { mutableStateOf<Int?>(null) }
     val glassNavBounds = remember { mutableStateMapOf<Int, Rect>() }
     val dockInteraction = remember { MutableInteractionSource() }
     val fabInteraction = remember { MutableInteractionSource() }
     
-    if (!liquidGlass) {
+    if (md3NavBar) {
+        val navContainerColor = liquidGlassContainerColor(
+            MaterialTheme.colorScheme.surfaceContainer,
+            enabled = liquidGlass,
+            backdrop = backdrop,
+        )
         androidx.compose.material3.NavigationBar(
-            modifier = modifier.fillMaxWidth(),
-            containerColor = MaterialTheme.colorScheme.surfaceContainer,
-            contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+            modifier = modifier
+                .fillMaxWidth()
+                .then(
+                    if (liquidGlass) {
+                        // Zero-radius CornerBasedShape, NOT RectangleShape: the
+                        // glass lens SDF only accepts corner-based shapes and
+                        // crashes the render pass for a plain rectangle.
+                        Modifier.liquidGlassChrome(
+                            RoundedCornerShape(0.dp),
+                            liquidGlass,
+                            LiquidGlassPreset.BottomNavigation,
+                            backdrop,
+                            interactionSource = dockInteraction,
+                        )
+                    } else {
+                        Modifier
+                    }
+                ),
+            containerColor = navContainerColor,
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            tonalElevation = if (liquidGlass) 0.dp else 3.dp,
         ) {
             tabs.forEachIndexed { index, tab ->
                 val onClick = remember(index) { { onSelect(index) } }
@@ -408,6 +437,25 @@ private fun FloatingNavBar(
                     onClick = onClick,
                     icon = { Icon(tab.icon(), contentDescription = null) },
                     label = { Text(androidx.compose.ui.res.stringResource(tab.labelRes), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                )
+            }
+            if (selectedIndex == tabs.indexOf(MainTab.PLAYLISTS)) {
+                NavigationBarItem(
+                    selected = false,
+                    onClick = onOpenGenerator,
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Filled.AutoAwesome,
+                            contentDescription = androidx.compose.ui.res.stringResource(com.lastwave.app.R.string.nav_generator),
+                        )
+                    },
+                    label = {
+                        Text(
+                            text = androidx.compose.ui.res.stringResource(com.lastwave.app.R.string.nav_generator),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
                 )
             }
         }

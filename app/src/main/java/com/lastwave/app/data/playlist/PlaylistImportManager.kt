@@ -5,6 +5,7 @@ import com.lastwave.app.data.generate.distinctSongs
 import com.lastwave.app.data.generate.youtubeVideoIdOrNull
 import com.lastwave.app.data.music.YouTubeMusicTrack
 import com.lastwave.app.data.music.YouTubePlaylistResult
+import com.lastwave.app.data.music.distinctPlaylistSongs
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.InputStream
@@ -34,7 +35,9 @@ class PlaylistImportManager @Inject constructor(
         playlist: YouTubePlaylistResult,
         selectedTracks: List<YouTubeMusicTrack> = playlist.tracks,
     ): SavedPlaylist = withContext(Dispatchers.IO) {
-        val tracks = selectedTracks.map { yt ->
+        // A fetched playlist can contain the same song twice (two uploads,
+        // two videoIds); collapse it so an import never stacks a duplicate.
+        val tracks = selectedTracks.distinctPlaylistSongs().map { yt ->
             GeneratedTrack(
                 name = yt.title,
                 artist = yt.artist,
@@ -151,4 +154,19 @@ class PlaylistImportManager @Inject constructor(
         )
         Pair(saved, result)
     }
+
+    /**
+     * Imports the user's Spotify Liked Songs collection into the local
+     * Liked Songs playlist, deduped by strong song identity.
+     */
+    suspend fun importSpotifyLikedIntoLikedSongs(): Pair<SavedPlaylist, ExternalImportResult> =
+        withContext(Dispatchers.IO) {
+            val result = spotifyPlaylistImporter.fetchAndMatchLikedSongs()
+            require(result.tracks.isNotEmpty()) {
+                "No liked songs found on Spotify or none could be matched."
+            }
+            likedSongsManager.mergeTracks(result.tracks)
+            val likedPlaylist = playlistRepository.ensureLikedSongs()
+            Pair(likedPlaylist, result)
+        }
 }

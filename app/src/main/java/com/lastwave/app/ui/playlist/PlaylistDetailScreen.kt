@@ -125,6 +125,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.lastwave.app.data.generate.GeneratedTrack
 import com.lastwave.app.data.playlist.LIKED_SONGS_MODE
+import com.lastwave.app.data.playlist.LOCAL_SONGS_MODE
+import com.lastwave.app.data.generate.isLocalFile
 import com.lastwave.app.data.playlist.SavedPlaylist
 import com.lastwave.app.data.playlist.isYouTubeOnly
 import com.lastwave.app.playback.toPlayableTrack
@@ -144,12 +146,40 @@ import java.util.Date
 import java.util.Locale
 import javax.inject.Inject
 
-enum class PlaylistTrackSort(val label: String) {
-    CUSTOM("Custom order"),
-    DATE_ADDED("Date added"),
-    NAME("Name"),
-    ARTIST("Artist"),
-    PLAY_TIME("Play time"),
+enum class PlaylistTrackSort(val labelRes: Int) {
+    CUSTOM(com.lastwave.app.R.string.pd_sort_custom),
+    DATE_ADDED(com.lastwave.app.R.string.pd_sort_date),
+    NAME(com.lastwave.app.R.string.pd_sort_name),
+    ARTIST(com.lastwave.app.R.string.pd_sort_artist),
+    PLAY_TIME(com.lastwave.app.R.string.pd_sort_playtime),
+}
+
+/**
+ * Remembers each playlist's last track sort (key = playlist id), so leaving
+ * and reopening a playlist keeps e.g. "Date added ↓" instead of resetting to
+ * Custom order. Plain SharedPreferences: tiny, synchronous, read once per open.
+ */
+internal object PlaylistSortMemory {
+    private const val PREFS = "playlist_track_sort"
+
+    fun load(context: android.content.Context, playlistId: Long): Pair<PlaylistTrackSort, Boolean> {
+        val raw = context.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+            .getString(playlistId.toString(), null)
+            ?: return PlaylistTrackSort.CUSTOM to true
+        val sort = PlaylistTrackSort.entries.firstOrNull { it.name == raw.substringBefore(':') }
+            ?: return PlaylistTrackSort.CUSTOM to true
+        return sort to (raw.substringAfter(':', "asc") != "desc")
+    }
+
+    fun save(context: android.content.Context, playlistId: Long, sort: PlaylistTrackSort, ascending: Boolean) {
+        val prefs = context.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE).edit()
+        if (sort == PlaylistTrackSort.CUSTOM && ascending) {
+            prefs.remove(playlistId.toString())
+        } else {
+            prefs.putString(playlistId.toString(), "${sort.name}:${if (ascending) "asc" else "desc"}")
+        }
+        prefs.apply()
+    }
 }
 
 private fun formatDate(millis: Long): String =
@@ -214,8 +244,9 @@ fun PlaylistDetailScreen(
     var overflowMenuOpen by remember { mutableStateOf(false) }
     val syncedPlaylistIds by viewModel.syncedPlaylistIds.collectAsStateWithLifecycle()
     var sortMenuOpen by remember { mutableStateOf(false) }
-    var currentSort by remember { mutableStateOf(PlaylistTrackSort.CUSTOM) }
-    var sortAscending by remember { mutableStateOf(true) }
+    val savedSort = remember(playlistId) { PlaylistSortMemory.load(context, playlistId) }
+    var currentSort by remember(playlistId) { mutableStateOf(savedSort.first) }
+    var sortAscending by remember(playlistId) { mutableStateOf(savedSort.second) }
     var isReorderLocked by remember { mutableStateOf(true) }
     var searchQuery by remember { mutableStateOf("") }
     var isSearchActive by remember { mutableStateOf(false) }
@@ -385,9 +416,9 @@ fun PlaylistDetailScreen(
                     // Metadata line (tracks count & date)
                     Text(
                         text = if (playlist.isYouTubeOnly) {
-                            playlist.remoteTrackCount?.let { "$it songs • YouTube Music" } ?: "YouTube Music"
+                            playlist.remoteTrackCount?.let { stringResource(com.lastwave.app.R.string.pd_yt_subtitle, "$it") } ?: stringResource(com.lastwave.app.R.string.pd_yt_only)
                         } else {
-                            "${playlist.tracks.size} songs \u2022 ${formatDate(playlist.createdAtMillis)}"
+                            stringResource(com.lastwave.app.R.string.pd_subtitle_local, playlist.tracks.size, formatDate(playlist.createdAtMillis))
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium,
@@ -434,7 +465,7 @@ fun PlaylistDetailScreen(
                             ),
                             modifier = Modifier.size(50.dp),
                         ) {
-                            Icon(Icons.Filled.Shuffle, contentDescription = "Shuffle", modifier = Modifier.size(22.dp))
+                            Icon(Icons.Filled.Shuffle, contentDescription = stringResource(com.lastwave.app.R.string.pd_shuffle_cd), modifier = Modifier.size(22.dp))
                         }
                         // Prominent Center Play / Playing Pill Button with Spring Physics
                         val playInteractionSource = remember { MutableInteractionSource() }
@@ -478,7 +509,7 @@ fun PlaylistDetailScreen(
                             )
                             Spacer(Modifier.width(8.dp))
                             Text(
-                                if (isThisPlaylistPlaying) "Playing" else "Play",
+                                if (isThisPlaylistPlaying) stringResource(com.lastwave.app.R.string.pd_playing) else stringResource(com.lastwave.app.R.string.pd_play),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                             )
@@ -501,8 +532,13 @@ fun PlaylistDetailScreen(
                             ),
                             modifier = Modifier.size(50.dp),
                         ) {
-                            Icon(Icons.Rounded.MyLocation, contentDescription = "Locate playing song", modifier = Modifier.size(22.dp))
+                            Icon(Icons.Rounded.MyLocation, contentDescription = stringResource(com.lastwave.app.R.string.pd_locate_cd), modifier = Modifier.size(22.dp))
                         }
+                    }
+
+                    if (playlist.mode == LOCAL_SONGS_MODE) {
+                        Spacer(Modifier.height(14.dp))
+                        LocalSongsPanel(trackCount = playlist.tracks.size)
                     }
 
                     Spacer(Modifier.height(18.dp))
@@ -532,7 +568,7 @@ fun PlaylistDetailScreen(
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 ) {
                                     Text(
-                                        text = currentSort.label,
+                                        text = stringResource(currentSort.labelRes),
                                         style = MaterialTheme.typography.labelLarge,
                                         fontWeight = FontWeight.SemiBold,
                                     )
@@ -563,7 +599,7 @@ fun PlaylistDetailScreen(
                                                 verticalAlignment = Alignment.CenterVertically,
                                             ) {
                                                 Text(
-                                                    text = option.label,
+                                                    text = stringResource(option.labelRes),
                                                     style = MaterialTheme.typography.bodyMedium,
                                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                                                     color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
@@ -593,6 +629,7 @@ fun PlaylistDetailScreen(
                                                 currentSort = option
                                                 sortAscending = option != PlaylistTrackSort.PLAY_TIME
                                             }
+                                            PlaylistSortMemory.save(context, playlistId, currentSort, sortAscending)
                                             sortMenuOpen = false
                                         },
                                     )
@@ -606,9 +643,9 @@ fun PlaylistDetailScreen(
                         ) {
                             Text(
                                 if (playlist.isYouTubeOnly) {
-                                    playlist.remoteTrackCount?.let { "$it tracks" } ?: "Tracks"
+                                    playlist.remoteTrackCount?.let { stringResource(com.lastwave.app.R.string.pd_track_count, it) } ?: stringResource(com.lastwave.app.R.string.pd_tracks_label)
                                 } else {
-                                    "${playlist.tracks.size} tracks"
+                                    stringResource(com.lastwave.app.R.string.pd_track_count, playlist.tracks.size)
                                 },
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -623,7 +660,7 @@ fun PlaylistDetailScreen(
                             ) {
                                 Icon(
                                     imageVector = if (isReorderLocked) Icons.Filled.Lock else Icons.Filled.LockOpen,
-                                    contentDescription = if (isReorderLocked) "Reorder locked" else "Reorder unlocked",
+                                    contentDescription = if (isReorderLocked) stringResource(com.lastwave.app.R.string.pd_reorder_locked_cd) else stringResource(com.lastwave.app.R.string.pd_reorder_unlocked_cd),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(20.dp),
                                 )
@@ -639,12 +676,12 @@ fun PlaylistDetailScreen(
                         androidx.compose.material3.OutlinedTextField(
                             value = searchQuery,
                             onValueChange = { searchQuery = it },
-                            placeholder = { Text("Search in playlist") },
+                            placeholder = { Text(stringResource(com.lastwave.app.R.string.pd_search_hint)) },
                             leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                             trailingIcon = {
                                 if (searchQuery.isNotEmpty()) {
                                     IconButton(onClick = { searchQuery = "" }) {
-                                        Icon(Icons.Filled.Close, contentDescription = "Clear search")
+                                        Icon(Icons.Filled.Close, contentDescription = stringResource(com.lastwave.app.R.string.pd_clear_search_cd))
                                     }
                                 }
                             },
@@ -676,10 +713,10 @@ fun PlaylistDetailScreen(
                         contentAlignment = Alignment.Center,
                     ) {
                         if (state.isDetailLoading) {
-                            ExpressiveLoadingIndicator(message = "Loading tracks...")
+                            ExpressiveLoadingIndicator(message = stringResource(com.lastwave.app.R.string.pd_loading))
                         } else {
                             Text(
-                                "No tracks in this playlist yet.",
+                                stringResource(com.lastwave.app.R.string.pd_empty),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -690,7 +727,7 @@ fun PlaylistDetailScreen(
                 if (!isReorderLocked && !reorderEnabled && !playlist.isYouTubeOnly && displayTracks.size > 1) {
                     item(key = "reorder_sort_hint", contentType = "hint") {
                         Text(
-                            "Switch to Custom order to rearrange",
+                            stringResource(com.lastwave.app.R.string.pd_reorder_hint),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp),
@@ -699,12 +736,8 @@ fun PlaylistDetailScreen(
                 }
                 itemsIndexed(
                     items = displayTracks,
-                    key = { index, _ ->
-                        // Never fall back to a bare "track_$index": two rows
-                        // would share one key after insert/delete and Lazy
-                        // throws at the viewport edge. displayKeys is always
-                        // exactly displayTracks.size long (same remember input).
-                        displayKeys.getOrElse(index) { "pos_fallback_$index" }
+                    key = { index, track ->
+                        displayKeys.getOrNull(index) ?: "pos_${track.url.ifBlank { "${track.name}_${track.artist}" }}_$index"
                     },
                     contentType = { _, _ -> "playlist_track" },
                 ) { index, track ->
@@ -712,7 +745,7 @@ fun PlaylistDetailScreen(
                         playbackState.current?.title.equals(track.name, ignoreCase = true) &&
                         playbackState.current?.artist.equals(track.artist, ignoreCase = true)
                     val isDragging = reorderEnabled && index == draggingIndex
-                    val stableKey = displayKeys.getOrElse(index) { "pos_fallback_$index" }
+                    val stableKey = displayKeys.getOrNull(index) ?: "pos_${track.url.ifBlank { "${track.name}_${track.artist}" }}_$index"
 
                     Box(
                         modifier = Modifier
@@ -896,7 +929,7 @@ fun PlaylistDetailScreen(
                 ) {
                     Icon(
                         Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back",
+                        contentDescription = stringResource(com.lastwave.app.R.string.pd_back_cd),
                         tint = if (showScrolledHeader) MaterialTheme.colorScheme.onSurface else Color.White,
                         modifier = Modifier.size(22.dp),
                     )
@@ -957,7 +990,7 @@ fun PlaylistDetailScreen(
                         ),
                         modifier = Modifier.size(38.dp),
                     ) {
-                        Icon(Icons.Rounded.MyLocation, contentDescription = "Locate playing song", modifier = Modifier.size(16.dp))
+                        Icon(Icons.Rounded.MyLocation, contentDescription = stringResource(com.lastwave.app.R.string.pd_locate_cd), modifier = Modifier.size(16.dp))
                     }
                 }
 
@@ -979,7 +1012,7 @@ fun PlaylistDetailScreen(
                         ) {
                             Icon(
                                 Icons.Filled.Search,
-                                contentDescription = "Search in playlist",
+                                contentDescription = stringResource(com.lastwave.app.R.string.pd_search_cd),
                                 tint = if (isSearchActive) MaterialTheme.colorScheme.primary else if (showScrolledHeader) MaterialTheme.colorScheme.onSurface else Color.White,
                             )
                         }
@@ -993,7 +1026,7 @@ fun PlaylistDetailScreen(
                             ) {
                                 Icon(
                                     Icons.Filled.MoreVert,
-                                    contentDescription = "Playlist options",
+                                    contentDescription = stringResource(com.lastwave.app.R.string.pd_options_cd),
                                     tint = if (showScrolledHeader) MaterialTheme.colorScheme.onSurface else Color.White,
                                 )
                             }
@@ -1007,15 +1040,16 @@ fun PlaylistDetailScreen(
                             shadowElevation = 12.dp,
                         ) {
                             DropdownMenuItem(
-                                text = { Text(if (playlist.isPinned) "Unpin playlist" else "Pin to top") },
+                                text = { Text(if (playlist.isPinned) stringResource(com.lastwave.app.R.string.pd_unpin) else stringResource(com.lastwave.app.R.string.pd_pin_top)) },
                                 leadingIcon = { Icon(Icons.Filled.PushPin, contentDescription = null) },
                                 onClick = {
                                     viewModel.togglePinned(playlistId)
                                     overflowMenuOpen = false
                                 },
                             )
-                            DropdownMenuItem(
-                                text = { Text("Download all songs") },
+                            val isLocalSongs = playlist.mode == LOCAL_SONGS_MODE
+                            if (!isLocalSongs) DropdownMenuItem(
+                                text = { Text(stringResource(com.lastwave.app.R.string.pl_download_all)) },
                                 leadingIcon = { Icon(Icons.Filled.Download, contentDescription = null) },
                                 onClick = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -1023,8 +1057,8 @@ fun PlaylistDetailScreen(
                                     overflowMenuOpen = false
                                 },
                             )
-                            DropdownMenuItem(
-                                text = { Text("Cancel playlist downloads") },
+                            if (!isLocalSongs) DropdownMenuItem(
+                                text = { Text(stringResource(com.lastwave.app.R.string.pd_cancel_downloads)) },
                                 leadingIcon = { Icon(Icons.Filled.Close, contentDescription = null) },
                                 onClick = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -1034,7 +1068,7 @@ fun PlaylistDetailScreen(
                             )
                             if (playlist.isYouTubeOnly) {
                                 DropdownMenuItem(
-                                    text = { Text("Make available locally") },
+                                    text = { Text(stringResource(com.lastwave.app.R.string.pl_make_local)) },
                                     leadingIcon = { Icon(Icons.Filled.BookmarkAdd, contentDescription = null) },
                                     onClick = {
                                         viewModel.makeLocal(playlistId)
@@ -1042,12 +1076,12 @@ fun PlaylistDetailScreen(
                                     },
                                 )
                             } else {
-                                if (playlist.mode != LIKED_SONGS_MODE) {
+                                if (playlist.mode != LIKED_SONGS_MODE && !isLocalSongs) {
                                     DropdownMenuItem(
                                         text = {
                                             Text(
-                                                if (state.regeneratingId == playlistId) "Regenerating…"
-                                                else "Regenerate playlist",
+                                                if (state.regeneratingId == playlistId) stringResource(com.lastwave.app.R.string.pl_regenerating)
+                                                else stringResource(com.lastwave.app.R.string.pd_regenerate_playlist),
                                             )
                                         },
                                         leadingIcon = {
@@ -1068,7 +1102,7 @@ fun PlaylistDetailScreen(
                                     )
                                 }
                                 DropdownMenuItem(
-                                    text = { Text("Change cover image") },
+                                    text = { Text(stringResource(com.lastwave.app.R.string.pd_change_cover)) },
                                     leadingIcon = { Icon(Icons.Filled.PhotoLibrary, contentDescription = null) },
                                     onClick = {
                                         coverEditorOpen = true
@@ -1077,7 +1111,7 @@ fun PlaylistDetailScreen(
                                 )
                                 if (playlist.mode != LIKED_SONGS_MODE) {
                                     DropdownMenuItem(
-                                        text = { Text("Rename playlist") },
+                                        text = { Text(stringResource(com.lastwave.app.R.string.pl_rename_title)) },
                                         leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
                                         onClick = {
                                             viewModel.requestRename(playlistId)
@@ -1087,17 +1121,17 @@ fun PlaylistDetailScreen(
                                 }
                             }
                             DropdownMenuItem(
-                                text = { Text("Export / Share") },
+                                text = { Text(stringResource(com.lastwave.app.R.string.pd_export_share)) },
                                 leadingIcon = { Icon(Icons.Filled.Share, contentDescription = null) },
                                 onClick = {
                                     viewModel.openExportSheet(playlistId)
                                     overflowMenuOpen = false
                                 },
                             )
-                            if (!playlist.isYouTubeOnly) {
+                            if (!playlist.isYouTubeOnly && !isLocalSongs) {
                                 val isSyncedToYt = syncedPlaylistIds == null || playlistId in (syncedPlaylistIds ?: emptySet())
                                 DropdownMenuItem(
-                                    text = { Text(if (isSyncedToYt) "Syncing to YouTube Music" else "Sync to YouTube Music") },
+                                    text = { Text(if (isSyncedToYt) stringResource(com.lastwave.app.R.string.pd_syncing_yt) else stringResource(com.lastwave.app.R.string.pd_sync_yt)) },
                                     leadingIcon = {
                                         Icon(
                                             Icons.Filled.CloudSync,
@@ -1112,8 +1146,8 @@ fun PlaylistDetailScreen(
                                     },
                                 )
                             }
-                                DropdownMenuItem(
-                                    text = { Text("Delete playlist", color = MaterialTheme.colorScheme.error) },
+                                if (!isLocalSongs) DropdownMenuItem(
+                                    text = { Text(stringResource(com.lastwave.app.R.string.pd_delete_item), color = MaterialTheme.colorScheme.error) },
                                     leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
                                     onClick = {
                                         viewModel.requestDelete(playlistId)
@@ -1151,7 +1185,7 @@ fun PlaylistDetailScreen(
                         strokeWidth = 2.dp,
                     )
                     Text(
-                        "Building a fresh playlist…",
+                        stringResource(com.lastwave.app.R.string.pd_building),
                         color = MaterialTheme.colorScheme.inverseOnSurface,
                         style = MaterialTheme.typography.labelLarge,
                     )
@@ -1187,7 +1221,7 @@ fun PlaylistDetailScreen(
     if (coverEditorOpen) {
         AlertDialog(
             onDismissRequest = { coverEditorOpen = false },
-            title = { Text("Playlist cover") },
+            title = { Text(stringResource(com.lastwave.app.R.string.pl_cover_title)) },
             text = {
                 Column(
                     modifier = Modifier.fillMaxWidth(),
@@ -1197,9 +1231,9 @@ fun PlaylistDetailScreen(
                     Spacer(Modifier.height(16.dp))
                     Text(
                         if (playlist.customCoverUri.isNullOrBlank()) {
-                            "Automatic cover uses the first song with available artwork metadata."
+                            stringResource(com.lastwave.app.R.string.pl_cover_auto_desc)
                         } else {
-                            "This playlist is using your selected image."
+                            stringResource(com.lastwave.app.R.string.pl_cover_custom_desc)
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1215,7 +1249,7 @@ fun PlaylistDetailScreen(
                         coverPicker.launch(arrayOf("image/*"))
                     },
                 ) {
-                    Text(if (playlist.customCoverUri.isNullOrBlank()) "Choose image" else "Change image")
+                    Text(if (playlist.customCoverUri.isNullOrBlank()) stringResource(com.lastwave.app.R.string.pl_choose_image) else stringResource(com.lastwave.app.R.string.pl_change_image))
                 }
             },
             dismissButton = {
@@ -1226,9 +1260,9 @@ fun PlaylistDetailScreen(
                                 viewModel.setCustomCover(playlistId, null)
                                 coverEditorOpen = false
                             },
-                        ) { Text("Use automatic") }
+                        ) { Text(stringResource(com.lastwave.app.R.string.pl_use_automatic)) }
                     }
-                    TextButton(onClick = { coverEditorOpen = false }) { Text("Done") }
+                    TextButton(onClick = { coverEditorOpen = false }) { Text(stringResource(com.lastwave.app.R.string.common_done)) }
                 }
             },
         )
@@ -1238,15 +1272,15 @@ fun PlaylistDetailScreen(
     if (state.deleteConfirmForPlaylistId != null) {
         AlertDialog(
             onDismissRequest = viewModel::dismissDeleteConfirm,
-            title = { Text("Delete playlist?") },
-            text = { Text("This will permanently remove \"${playlist.title}\".") },
+            title = { Text(stringResource(com.lastwave.app.R.string.pd_delete_title)) },
+            text = { Text(stringResource(com.lastwave.app.R.string.pd_delete_text, playlist.title)) },
             confirmButton = {
                 TextButton(onClick = {
                     viewModel.confirmDelete()
                     onBack()
-                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                }) { Text(stringResource(com.lastwave.app.R.string.common_delete), color = MaterialTheme.colorScheme.error) }
             },
-            dismissButton = { TextButton(onClick = viewModel::dismissDeleteConfirm) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = viewModel::dismissDeleteConfirm) { Text(stringResource(com.lastwave.app.R.string.common_cancel)) } },
         )
     }
 
@@ -1255,20 +1289,20 @@ fun PlaylistDetailScreen(
         var title by remember(id) { mutableStateOf(playlist.title) }
         AlertDialog(
             onDismissRequest = viewModel::dismissRename,
-            title = { Text("Rename playlist") },
+            title = { Text(stringResource(com.lastwave.app.R.string.pl_rename_title)) },
             text = {
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },
-                    label = { Text("Playlist name") },
+                    label = { Text(stringResource(com.lastwave.app.R.string.pl_name_label)) },
                     singleLine = true,
                     shape = RoundedCornerShape(16.dp),
                 )
             },
             confirmButton = {
-                TextButton(onClick = { viewModel.renamePlaylist(title) }, enabled = title.isNotBlank()) { Text("Save") }
+                TextButton(onClick = { viewModel.renamePlaylist(title) }, enabled = title.isNotBlank()) { Text(stringResource(com.lastwave.app.R.string.common_save)) }
             },
-            dismissButton = { TextButton(onClick = viewModel::dismissRename) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = viewModel::dismissRename) { Text(stringResource(com.lastwave.app.R.string.common_cancel)) } },
         )
     }
 
@@ -1288,6 +1322,8 @@ fun PlaylistDetailScreen(
         TrackContextMenuSheet(
             target = TrackMenuTarget.Track(track.name, track.artist, track.url),
             capabilities = TrackMenuCapabilities(showCopyActions = true, showDeleteScrobble = true),
+            // Keep the file path so menu actions play / add the local copy.
+            playableTrack = track.takeIf { it.isLocalFile() }?.toPlayableTrack(),
             playbackSourceLabel = playlist.title,
             onDismiss = { menuTarget = null },
             onRemoveFromPlaylist = {
@@ -1478,7 +1514,7 @@ private fun NativeTrackRow(
             ) {
                 Icon(
                     Icons.Filled.MoreVert,
-                    contentDescription = "Song options",
+                    contentDescription = stringResource(com.lastwave.app.R.string.pd_song_options_cd),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
                     modifier = Modifier.size(18.dp),
                 )

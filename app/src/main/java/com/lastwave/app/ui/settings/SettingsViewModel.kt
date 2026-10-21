@@ -10,7 +10,6 @@ import com.lastwave.app.data.local.AccentMode
 import com.lastwave.app.data.local.ThemeMode
 import com.lastwave.app.data.local.AppLanguage
 import com.lastwave.app.data.local.EqualizerSettings
-import com.lastwave.app.data.local.LyricsUiVersion
 import com.lastwave.app.data.local.MiscSettings
 import com.lastwave.app.data.local.ScrobblerPreferences
 import com.lastwave.app.data.local.ScrobblerSettings
@@ -103,13 +102,17 @@ class SettingsViewModel @Inject constructor(
     private val ytMusicPreferences: com.lastwave.app.data.ytmusic.YtMusicPreferences,
     private val ytMusicLibraryManager: com.lastwave.app.data.ytmusic.YtMusicLibraryManager,
     private val downloadedTrackDao: com.lastwave.app.data.local.db.DownloadedTrackDao,
+    private val podcastProgressStore: com.lastwave.app.data.podcast.PodcastProgressStore,
     private val appLocaleManager: com.lastwave.app.util.AppLocaleManager,
     val playlistImportManager: com.lastwave.app.data.playlist.PlaylistImportManager,
     val innerTube: com.lastwave.app.data.music.InnerTubeMusicApi,
     val appUpdateManager: com.lastwave.app.data.update.AppUpdateManager,
     val phoneWearableBridge: com.lastwave.app.sync.PhoneWearableBridge,
+    private val spotifyPreferences: com.lastwave.app.data.spotify.SpotifyPreferences,
     @dagger.hilt.android.qualifiers.ApplicationContext private val context: android.content.Context,
 ) : ViewModel() {
+
+    private val appContext: android.content.Context get() = context
 
     val connectedWatches = phoneWearableBridge.connectedWatches
     val watchLastSyncTimestamp = phoneWearableBridge.lastSyncTimestamp
@@ -146,11 +149,42 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+
     val authState: StateFlow<com.lastwave.app.data.model.AuthState> = authRepository.authState
     val updateInfo = appUpdateManager.updateInfo
 
     fun checkForUpdates() = appUpdateManager.checkForUpdate(isSilent = false)
     fun openUpdate(context: android.content.Context) = appUpdateManager.openUpdate(context)
+
+    val spotifyConnected: StateFlow<Boolean> = spotifyPreferences.isConnected
+        .withSettingsFallback("Spotify connection", false)
+        .stateIn(viewModelScope, SettingsSharing, false)
+
+    val spotifyCanvasEnabled: StateFlow<Boolean> = spotifyPreferences.canvasEnabled
+        .withSettingsFallback("Spotify canvas preference", true)
+        .stateIn(viewModelScope, SettingsSharing, true)
+
+    val spotifySyncLikedSongsEnabled: StateFlow<Boolean> = spotifyPreferences.syncLikedSongsEnabled
+        .withSettingsFallback("Spotify sync liked songs preference", true)
+        .stateIn(viewModelScope, SettingsSharing, true)
+
+    fun setSpotifyCanvasEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            spotifyPreferences.setCanvasEnabled(enabled)
+        }
+    }
+
+    fun setSpotifySyncLikedSongsEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            spotifyPreferences.setSyncLikedSongsEnabled(enabled)
+        }
+    }
+
+    fun disconnectSpotify() {
+        viewModelScope.launch {
+            spotifyPreferences.clearConnection()
+        }
+    }
 
     /** YouTube Music account connection + playlist-sync state (§ YouTube Music). */
     val ytConnection: StateFlow<com.lastwave.app.data.ytmusic.YtConnection> = ytAuthManager.connection
@@ -291,15 +325,21 @@ class SettingsViewModel @Inject constructor(
                 throw cancellation
             } catch (error: Exception) {
                 android.util.Log.e(SETTINGS_TAG, "Failed to $action", error)
+                val toast = runCatching {
+                    appContext.getString(com.lastwave.app.R.string.toast_action_fail, action)
+                }.getOrDefault("Couldn't $action. Please try again.")
                 _uiState.update { state ->
-                    state.copy(toastMessage = "Couldn't $action. Please try again.")
+                    state.copy(toastMessage = toast)
                 }
             } catch (error: LinkageError) {
                 // Missing/altered framework or JNI symbols on a custom ROM
                 // disable only this action, never the Settings destination.
                 android.util.Log.e(SETTINGS_TAG, "Unsupported platform action: $action", error)
+                val toast = runCatching {
+                    appContext.getString(com.lastwave.app.R.string.toast_unsupported)
+                }.getOrDefault("This action isn't supported on this device.")
                 _uiState.update { state ->
-                    state.copy(toastMessage = "This action isn't supported on this device.")
+                    state.copy(toastMessage = toast)
                 }
             }
         }
@@ -318,10 +358,10 @@ class SettingsViewModel @Inject constructor(
                     throw error
                 } catch (error: Exception) {
                     android.util.Log.e(SETTINGS_TAG, "Equalizer preview failed", error)
-                    _uiState.update { it.copy(toastMessage = "Couldn't apply equalizer settings.") }
+                    _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_eq_fail)) }
                 } catch (error: LinkageError) {
                     android.util.Log.e(SETTINGS_TAG, "Equalizer unavailable", error)
-                    _uiState.update { it.copy(toastMessage = "Equalizer isn't available on this device.") }
+                    _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_eq_missing)) }
                 }
             }
         }
@@ -370,12 +410,12 @@ class SettingsViewModel @Inject constructor(
         val key = apiKey.trim()
         val secret = apiSecret.trim()
         if (key.length < 16 || secret.length < 16) {
-            _uiState.update { it.copy(toastMessage = "That key/secret looks too short — check both fields") }
+            _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_key_short)) }
             return
         }
         launchSettingsAction("save API credentials") {
             authRepository.saveApiCredentials(key, secret)
-            _uiState.update { it.copy(toastMessage = "API key saved — now connect Last.fm") }
+            _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_key_saved)) }
         }
     }
 
@@ -383,7 +423,7 @@ class SettingsViewModel @Inject constructor(
     fun clearApiKey() {
         launchSettingsAction("remove the API key") {
             sessionPreferences.setApiCredentials("", "")
-            _uiState.update { it.copy(toastMessage = "API key removed") }
+            _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_key_removed)) }
         }
     }
 
@@ -412,7 +452,7 @@ class SettingsViewModel @Inject constructor(
                         }
                     } else {
                         runCatching { sessionPreferences.exitGuestMode() }
-                        _uiState.update { it.copy(toastMessage = "Last.fm connected") }
+                        _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_lfm_ok)) }
                     }
                 } finally {
                     _lastFmConnecting.value = false
@@ -426,7 +466,7 @@ class SettingsViewModel @Inject constructor(
     fun beginLastFmConnect() {
         val url = authRepository.authUrl()
         if (url == null) {
-            _uiState.update { it.copy(toastMessage = "Paste your API key below first — then connect") }
+            _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_lfm_need_key)) }
             return
         }
         _lastFmAuthUrl.value = url
@@ -447,7 +487,7 @@ class SettingsViewModel @Inject constructor(
         launchSettingsAction("disconnect Last.fm") {
             authRepository.signOut()
             _lastFmAuthUrl.value = null
-            _uiState.update { it.copy(toastMessage = "Last.fm disconnected — using local stats") }
+            _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_lfm_off)) }
         }
     }
 
@@ -470,6 +510,7 @@ class SettingsViewModel @Inject constructor(
     fun setThemeMode(mode: ThemeMode) = launchSettingsAction("update theme mode") { themeRepository.setThemeMode(mode) }
     fun setAmoled(enabled: Boolean) = launchSettingsAction("update AMOLED mode") { themeRepository.setAmoled(enabled) }
     fun setLiquidGlass(enabled: Boolean) = launchSettingsAction("update Liquid Glass") { themeRepository.setLiquidGlass(enabled) }
+    fun setMd3NavBar(enabled: Boolean) = launchSettingsAction("update MD3 Navigation Bar") { themeRepository.setMd3NavBar(enabled) }
     fun setAccentMode(mode: AccentMode) = launchSettingsAction("update accent mode") { themeRepository.setMode(mode) }
     fun setManualAccent(color: Color) = launchSettingsAction("update accent color") { themeRepository.setManualAccent(color) }
     fun openColorWheel() = _uiState.update { it.copy(showColorWheel = true) }
@@ -527,7 +568,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setUsbExclusiveEnabled(enabled: Boolean) = launchSettingsAction("update USB exclusive output") {
         if (enabled && android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) {
-            _uiState.update { it.copy(toastMessage = "USB exclusive needs Android 10 or newer") }
+            _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_usb_old)) }
             return@launchSettingsAction
         }
         com.lastwave.app.playback.usb.UsbExclusivePrefs.setEnabled(context, enabled)
@@ -536,8 +577,47 @@ class SettingsViewModel @Inject constructor(
             settingsPreferences.setBitPerfectEnabled(true)
             settingsPreferences.setStudioMasterClarity(false)
             applyNativeAudio { it.setStudioMasterClarity(false) }
-            _uiState.update { it.copy(toastMessage = "USB exclusive on — Bit-Perfect will use usbdevfs when a DAC is granted") }
+            _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_usb_on)) }
         }
+    }
+
+    // ── Fork: internal direct output (mixer bypass without a USB DAC) ──
+
+    val internalDirectEnabled: StateFlow<Boolean> =
+        com.lastwave.app.playback.usb.InternalDirectPrefs.enabledFlow(context)
+            .withSettingsFallback("internal direct output", false)
+            .stateIn(viewModelScope, SettingsSharing, false)
+
+    val forceSoftwareVolume: StateFlow<Boolean> =
+        com.lastwave.app.playback.usb.InternalDirectPrefs.forceSoftwareVolumeFlow(context)
+            .withSettingsFallback("software volume", false)
+            .stateIn(viewModelScope, SettingsSharing, false)
+
+    /** Collecting this (settings screen visible) lets route changes re-probe the output. */
+    val internalDirectAvailability = musicPlayer.internalDirectAvailability
+
+    /** Probes what the current output accepts; called when the audio settings open. */
+    fun refreshInternalDirectAvailability() {
+        musicPlayer.refreshInternalDirectAvailability()
+    }
+
+    fun setInternalDirectEnabled(enabled: Boolean) = launchSettingsAction("update internal direct output") {
+        com.lastwave.app.playback.usb.InternalDirectPrefs.setEnabled(context, enabled)
+        if (enabled) {
+            // Same contract as USB exclusive: Bit-Perfect is what turns the DSP off.
+            applyNativeAudio { it.setBitPerfect(true) }
+            settingsPreferences.setBitPerfectEnabled(true)
+            settingsPreferences.setStudioMasterClarity(false)
+            applyNativeAudio { it.setStudioMasterClarity(false) }
+            _uiState.update {
+                it.copy(toastMessage = context.getString(com.lastwave.app.R.string.settings_internal_direct_enabled_toast))
+            }
+        }
+        musicPlayer.refreshInternalDirectAvailability()
+    }
+
+    fun setForceSoftwareVolume(enabled: Boolean) = launchSettingsAction("update software volume") {
+        com.lastwave.app.playback.usb.InternalDirectPrefs.setForceSoftwareVolume(context, enabled)
     }
 
     // ── Clarity output preset + spatial bypass ──
@@ -564,9 +644,10 @@ class SettingsViewModel @Inject constructor(
 
     fun setLoudnessPreamp(preampDb: Float) =
         launchSettingsAction("update loudness preamp") { loudnessPrefs.setPreampDb(preampDb) }
-    fun setLyricsUiVersion(version: LyricsUiVersion) = launchSettingsAction("update lyrics UI version") { settingsPreferences.setLyricsUiVersion(version) }
+    fun setPodcastsEnabled(enabled: Boolean) = launchSettingsAction("update podcasts setting") {
+        settingsPreferences.setPodcastsEnabled(enabled)
+    }
     fun setWordByWordLyrics(enabled: Boolean) = launchSettingsAction("update word-by-word lyrics") { settingsPreferences.setWordByWordLyrics(enabled) }
-    fun setLyricsAnimation(animation: com.lastwave.app.data.local.LyricsAnimation) = launchSettingsAction("update lyrics animation") { settingsPreferences.setLyricsAnimation(animation) }
     fun setLyricsProvider(provider: com.lastwave.app.data.local.LyricsProvider) = launchSettingsAction("update lyrics provider") { settingsPreferences.setLyricsProvider(provider) }
     fun setLyricsOffsetMs(offsetMs: Long) = launchSettingsAction("update lyrics sync offset") {
         settingsPreferences.setLyricsOffsetMs(offsetMs.coerceIn(-10000L, 10000L))
@@ -583,6 +664,18 @@ class SettingsViewModel @Inject constructor(
     }
     fun setRotatingBackgroundEnabled(enabled: Boolean) = launchSettingsAction("update rotating background") {
         settingsPreferences.setRotatingBackgroundEnabled(enabled)
+    }
+    fun setLyricsRotatingBackgroundEnabled(enabled: Boolean) = launchSettingsAction("update lyrics rotating background") {
+        settingsPreferences.setLyricsRotatingBackgroundEnabled(enabled)
+    }
+    fun setKeepLyricsScreenAwake(enabled: Boolean) = launchSettingsAction("update keep lyrics screen awake") {
+        settingsPreferences.setKeepLyricsScreenAwake(enabled)
+    }
+    fun setLyricsButtonsAutoHideSeconds(seconds: Int) = launchSettingsAction("update lyrics buttons auto-hide") {
+        settingsPreferences.setLyricsButtonsAutoHideSeconds(seconds)
+    }
+    fun setTranslationLanguage(language: String) = launchSettingsAction("update translation language") {
+        settingsPreferences.setTranslationLanguage(language)
     }
     fun setCanvasEnabled(enabled: Boolean) = launchSettingsAction("update canvas enabled setting") {
         settingsPreferences.setCanvasEnabled(enabled)
@@ -646,7 +739,7 @@ class SettingsViewModel @Inject constructor(
         launchSettingsAction("clear exclusions") {
             discoverRepository.clearRecommendationExclusions()
             refreshRecommendationExclusionCount()
-            _uiState.update { it.copy(toastMessage = "Exclusion history cleared") }
+            _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_excl_cleared)) }
         }
     }
 
@@ -663,7 +756,9 @@ class SettingsViewModel @Inject constructor(
             }
             downloadManager.clearAllDownloads()
             discoverRepository.clearRecommendationExclusions()
+            podcastProgressStore.clear()
             playlistRepository.clearAll()
+            runCatching { ytAuthManager.signOut() }
             // Session last: clearing it navigates to login and can cancel this
             // scope, which used to interrupt the reset halfway through.
             sessionPreferences.clearAll()
@@ -679,13 +774,13 @@ class SettingsViewModel @Inject constructor(
             try {
                 val json = backupRepository.buildBackup(appVersionName)
                 if (json.isBlank()) {
-                    _uiState.update { it.copy(toastMessage = "Backup creation failed: empty data") }
+                    _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_backup_empty)) }
                     return@launch
                 }
                 val bytesWritten = fileExportHelper.writeTextToUri(uri, json)
-                _uiState.update { it.copy(toastMessage = "Backup saved successfully (${bytesWritten / 1024} KB)") }
+                _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_backup_ok, bytesWritten / 1024)) }
             } catch (e: Exception) {
-                _uiState.update { it.copy(toastMessage = "Backup failed: ${e.localizedMessage ?: e.message}") }
+                _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_backup_fail, e.localizedMessage ?: e.message)) }
             }
         }
     }
@@ -695,12 +790,12 @@ class SettingsViewModel @Inject constructor(
             try {
                 val content = fileExportHelper.readTextFromUri(uri)
                 if (content.isNullOrBlank()) {
-                    _uiState.update { it.copy(toastMessage = "Selected file is empty or unreadable") }
+                    _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_empty_file)) }
                     return@launch
                 }
                 stagePendingRestore(content, uri)
             } catch (e: Exception) {
-                _uiState.update { it.copy(toastMessage = "Restore read error: ${e.localizedMessage ?: e.message}") }
+                _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_restore_read, e.localizedMessage ?: e.message)) }
             }
         }
     }
@@ -715,18 +810,18 @@ class SettingsViewModel @Inject constructor(
                 }.getOrNull() ?: uri.lastPathSegment?.substringAfterLast('/') ?: "Imported Playlist.csv"
 
                 val fileType = displayName.substringAfterLast('.', "File").uppercase()
-                _uiState.update { it.copy(toastMessage = "Matching and importing $fileType songs...") }
+                _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_import_matching, fileType)) }
 
                 val inputStream = context.contentResolver.openInputStream(uri)
                     ?: error("Could not open selected playlist file")
 
                 val (saved, result) = inputStream.use { playlistImportManager.importCsvStream(it, displayName) }
                 _uiState.update {
-                    it.copy(toastMessage = "Imported \"${saved.title}\": ${result.matchedCount} tracks, ${result.totalRows - result.matchedCount} skipped")
+                    it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_import_result, saved.title, result.matchedCount, result.totalRows - result.matchedCount))
                 }
             } catch (e: Exception) {
                 _uiState.update {
-                    it.copy(toastMessage = "Import failed: ${e.localizedMessage ?: e.message}")
+                    it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_import_fail, e.localizedMessage ?: e.message))
                 }
             }
         }
@@ -744,7 +839,7 @@ class SettingsViewModel @Inject constructor(
             } catch (e: Exception) { null }
             val mirrorCount = playlistRepository.publicMirrorPlaylistCount(content)
             if (backup == null && mirrorCount == null) {
-                _uiState.update { it.copy(toastMessage = "That isn't a LastWave backup or playlist JSON") }
+                _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_not_json)) }
                 return@launchSettingsAction
             }
             _uiState.update {
@@ -783,7 +878,7 @@ class SettingsViewModel @Inject constructor(
                                 pendingRestoreContent = null,
                                 pendingRestoreKind = null,
                                 pendingRestoreUri = null,
-                                toastMessage = "Synced $count playlist(s) from local JSON",
+                                toastMessage = appContext.getString(com.lastwave.app.R.string.toast_synced, count),
                             )
                         }
                         kotlinx.coroutines.delay(900)
@@ -791,7 +886,7 @@ class SettingsViewModel @Inject constructor(
                     }
                     .onFailure { error ->
                         _uiState.update {
-                            it.copy(showRestoreConfirm = false, toastMessage = "Playlist sync failed: ${error.message}")
+                            it.copy(showRestoreConfirm = false, toastMessage = appContext.getString(com.lastwave.app.R.string.toast_sync_fail, error.message))
                         }
                     }
                 return@launchSettingsAction
@@ -807,15 +902,15 @@ class SettingsViewModel @Inject constructor(
                         it.copy(
                             showRestoreConfirm = false,
                             pendingRestoreContent = null,
-                            toastMessage = "Restored ${result.playlistCount} playlist(s)$exclusionNote",
+                            toastMessage = appContext.getString(com.lastwave.app.R.string.toast_restored, result.playlistCount, exclusionNote),
                         )
                     }
                     kotlinx.coroutines.delay(900)
                     onComplete()
                 }
-                RestoreResult.UnsupportedSchema -> _uiState.update { it.copy(showRestoreConfirm = false, toastMessage = "This backup was made with a newer version of LastWave") }
-                RestoreResult.InvalidFile -> _uiState.update { it.copy(showRestoreConfirm = false, toastMessage = "That file doesn't look like a LastWave backup") }
-                is RestoreResult.Failed -> _uiState.update { it.copy(showRestoreConfirm = false, toastMessage = "Restore failed: ${result.message}") }
+                RestoreResult.UnsupportedSchema -> _uiState.update { it.copy(showRestoreConfirm = false, toastMessage = appContext.getString(com.lastwave.app.R.string.toast_newer_backup)) }
+                RestoreResult.InvalidFile -> _uiState.update { it.copy(showRestoreConfirm = false, toastMessage = appContext.getString(com.lastwave.app.R.string.toast_not_backup)) }
+                is RestoreResult.Failed -> _uiState.update { it.copy(showRestoreConfirm = false, toastMessage = appContext.getString(com.lastwave.app.R.string.toast_restore_fail, result.message)) }
             }
         }
     }
@@ -837,7 +932,7 @@ class SettingsViewModel @Inject constructor(
             val report = withContext(Dispatchers.IO) { buildDiagnosticsReport() }
             val filename = "lastwave-diagnostics-${System.currentTimeMillis()}.txt"
             fileExportHelper.shareFile(filename, report, "text/plain")
-            _uiState.update { it.copy(toastMessage = "Diagnostics ready to share") }
+            _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_diag_ready)) }
         }
     }
 
@@ -953,6 +1048,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setSubmitNowPlaying(enabled: Boolean) = launchSettingsAction("update Now Playing submission") { scrobblerPreferences.setSubmitNowPlaying(enabled) }
     fun setScrobblePercent(percent: Int) = launchSettingsAction("update the scrobble threshold") { scrobblerPreferences.setScrobblePercent(percent) }
+    fun setLiveTelemetryEnabled(enabled: Boolean) = launchSettingsAction("update live telemetry") { settingsPreferences.setLiveTelemetryEnabled(enabled) }
 
     // ── YouTube Music account ──
 
@@ -977,11 +1073,47 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    fun connectWithCookies(rawText: String, onComplete: ((Boolean, String?) -> Unit)? = null) {
+        viewModelScope.launch {
+            val normalized = try {
+                com.lastwave.app.data.ytmusic.CookieNormalizer.normalize(rawText)
+            } catch (e: Exception) {
+                onComplete?.invoke(false, e.message ?: "Invalid cookies. Make sure SAPISID is present.")
+                return@launch
+            }
+            try {
+                ytAuthManager.connect(normalized, "", null, null)
+                kotlinx.coroutines.withTimeoutOrNull(4_000L) { ytAuthManager.awaitLoadedConnection() }
+                runCatching { sessionPreferences.exitGuestMode() }
+                var info: com.lastwave.app.data.music.YtAccountInfo? = null
+                for ((attempt, waitMs) in longArrayOf(0L, 1_200L, 2_500L, 4_000L).withIndex()) {
+                    if (waitMs > 0L) kotlinx.coroutines.delay(waitMs)
+                    info = runCatching { innerTube.fetchAccountInfo() }.getOrNull()
+                    if (info != null) break
+                }
+                val displayName = info?.accountName?.takeIf { it.isNotBlank() } ?: "Google account"
+                if (info != null) {
+                    ytAuthManager.updateAccountIdentity(info.accountName, info.channelHandle, info.photoUrl)
+                }
+                viewModelScope.launch {
+                    runCatching { ytMusicSyncManager.syncNow("connected") }
+                }
+                _uiState.update { it.copy(toastMessage = "Connected as $displayName") }
+                onComplete?.invoke(true, null)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (e: Exception) {
+                onComplete?.invoke(false, e.localizedMessage ?: e.message ?: "Connection failed")
+            }
+        }
+    }
+
     fun disconnectYouTube() {
         launchSettingsAction("disconnect YouTube Music") {
             ytMusicPreferences.setSyncEnabled(false)
+            _ytChannels.value = emptyList()
             ytAuthManager.signOut()
-            _uiState.update { it.copy(toastMessage = "YouTube Music disconnected") }
+            _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_yt_off)) }
         }
     }
 
@@ -1032,15 +1164,15 @@ class SettingsViewModel @Inject constructor(
             try {
                 _ytChannels.value = innerTube.fetchAvailableChannels()
                 if (_ytChannels.value.isEmpty()) {
-                    _uiState.update { it.copy(toastMessage = "Couldn't load YouTube channels. Please try again.") }
+                    _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_yt_channels_fail)) }
                 }
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (error: Exception) {
                 android.util.Log.e(SETTINGS_TAG, "Failed to load YouTube channels", error)
-                _uiState.update { it.copy(toastMessage = "Couldn't load YouTube channels. Please try again.") }
+                _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_yt_channels_fail)) }
             } catch (error: LinkageError) {
-                _uiState.update { it.copy(toastMessage = "This action isn't supported on this device.") }
+                _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_unsupported)) }
             } finally {
                 _ytChannelsLoading.value = false
             }
@@ -1064,7 +1196,7 @@ class SettingsViewModel @Inject constructor(
                 channel.photoUrl,
                 channel.pageId,
             )
-            _uiState.update { it.copy(toastMessage = "Switched to ${channel.accountName} — refreshing library…") }
+            _uiState.update { it.copy(toastMessage = appContext.getString(com.lastwave.app.R.string.toast_yt_switched, channel.accountName)) }
             runCatching { ytMusicLibraryManager.refresh() }
             if (ytSyncEnabled.value) {
                 runCatching { ytMusicSyncManager.syncNow("channel_switch") }
@@ -1084,7 +1216,7 @@ class SettingsViewModel @Inject constructor(
             when (val result = authRepository.obtainSessionKey(password)) {
                 AuthRepository.SessionKeyResult.Success -> {
                     scrobblerPreferences.setEnabled(true)
-                    _uiState.update { it.copy(showSessionKeyDialog = false, sessionKeyLoading = false, toastMessage = "Scrobbling enabled") }
+                    _uiState.update { it.copy(showSessionKeyDialog = false, sessionKeyLoading = false, toastMessage = appContext.getString(com.lastwave.app.R.string.toast_scrobble_on)) }
                 }
                 is AuthRepository.SessionKeyResult.Failed -> {
                     _uiState.update { it.copy(sessionKeyLoading = false, sessionKeyError = result.message) }

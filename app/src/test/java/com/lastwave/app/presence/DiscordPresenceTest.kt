@@ -47,6 +47,7 @@ class DiscordPresenceTest {
     private fun state(
         track: PlayableTrack? = track(),
         isPlaying: Boolean = true,
+        isBuffering: Boolean = false,
         positionMs: Long = 64_000L,
         durationMs: Long = 227_000L,
         isLossless: Boolean = true,
@@ -57,6 +58,7 @@ class DiscordPresenceTest {
     ) = MusicPlayerState(
         current = track,
         isPlaying = isPlaying,
+        isBuffering = isBuffering,
         positionMs = positionMs,
         durationMs = durationMs,
         isLossless = isLossless,
@@ -136,15 +138,13 @@ class DiscordPresenceTest {
     }
 
     @Test
-    fun assetsCarryAlbumAndPlayState() {
+    fun assetsCarryOnlyTheCoverAndAlbumText() {
         val playing = DiscordPresence.buildActivity(state(isPlaying = true), NOW_MS)["assets"]!!.jsonObject
         assertEquals("Afterglow", playing["large_text"]?.jsonPrimitive?.content)
-        assertEquals("play", playing["small_image"]?.jsonPrimitive?.content)
-        assertEquals("Playing", playing["small_text"]?.jsonPrimitive?.content)
-
-        val paused = DiscordPresence.buildActivity(state(isPlaying = false), NOW_MS)["assets"]!!.jsonObject
-        assertEquals("pause", paused["small_image"]?.jsonPrimitive?.content)
-        assertEquals("Paused", paused["small_text"]?.jsonPrimitive?.content)
+        assertEquals("https://lh3.googleusercontent.com/cover=abc", playing["large_image"]?.jsonPrimitive?.content)
+        // No play/pause badge: one cover art, nothing else.
+        assertNull(playing["small_image"])
+        assertNull(playing["small_text"])
 
         // No album: the title stands in, exactly as on desktop.
         val noAlbum = DiscordPresence.buildActivity(state(track = track(album = null)), NOW_MS)["assets"]!!.jsonObject
@@ -301,6 +301,48 @@ class DiscordPresenceTest {
             )["state"]?.jsonPrimitive?.content,
         )
         assertEquals("LastWave", DiscordPresence.stateLine("", null, "Title", ""))
+    }
+
+    // ---- A buffer stall is not a pause ------------------------------------
+    //
+    // ExoPlayer's isPlaying is false on every stall (first buffer of a fresh
+    // track, a mid-track hiccup, the re-prepare behind a quality upgrade)
+    // while playWhenReady stays true, so the state reports isBuffering for
+    // the whole stall. The user never paused; the card must not say they did.
+
+    @Test
+    fun bufferingWhileTheUserWantsPlaybackStillReadsAsPlaying() {
+        val stalled = state(isPlaying = false, isBuffering = true)
+        val activity = DiscordPresence.buildActivity(stalled, NOW_MS)
+        val assets = activity["assets"]!!.jsonObject
+        assertNull(assets["small_image"])
+        assertNull(assets["small_text"])
+        // The countdown bar stays up while the buffer refills, so the card
+        // never reads as a frozen "paused" one in the middle of a stall.
+        assertTrue(activity.containsKey("timestamps"))
+    }
+
+    @Test
+    fun aStallSharesThePlayingSignatureSoItCannotChurnOrBeSwallowed() {
+        // Visible output is identical, so the throttle must treat a stall and
+        // rendering as one signature: a resume repushes nothing (nothing the
+        // card shows changed), and a stall cannot become a frame either.
+        assertEquals(
+            DiscordPresence.signature(state(isPlaying = true, isBuffering = false)),
+            DiscordPresence.signature(state(isPlaying = false, isBuffering = true)),
+        )
+    }
+
+    @Test
+    fun aRealPauseStillReadsAsPausedAndRepushes() {
+        // pause() clears both flags, so only the intent-aware read can tell
+        // "waiting for data while playing" apart from "the user paused".
+        val paused = state(isPlaying = false, isBuffering = false)
+        val activity = DiscordPresence.buildActivity(paused, NOW_MS)
+        assertNull(activity["timestamps"])
+        assertFalse(
+            DiscordPresence.signature(paused) == DiscordPresence.signature(state()),
+        )
     }
 
     // ---- Frames -----------------------------------------------------------

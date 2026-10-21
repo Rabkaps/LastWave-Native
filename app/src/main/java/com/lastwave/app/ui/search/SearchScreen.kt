@@ -59,6 +59,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -66,10 +67,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.stringResource
+import com.lastwave.app.R
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -136,6 +142,13 @@ fun SearchScreen(
     // the overflow button keeps the full sheet.
     var miniTrayItem by remember { mutableStateOf<SearchResultItem?>(null) }
     val focusManager = LocalFocusManager.current
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+        keyboardController?.show()
+    }
 
     Box(
         modifier = Modifier.fillMaxSize(),
@@ -186,10 +199,19 @@ fun SearchScreen(
                                 focusManager.clearFocus()
                                 viewModel.searchNow()
                             },
+                            onDone = {
+                                focusManager.clearFocus()
+                                viewModel.searchNow()
+                            },
+                            onGo = {
+                                focusManager.clearFocus()
+                                viewModel.searchNow()
+                            },
                         ),
                         modifier = Modifier
                             .weight(1f)
-                            .height(46.dp),
+                            .height(46.dp)
+                            .focusRequester(focusRequester),
                         decorationBox = { innerTextField ->
                             Row(
                                 modifier = Modifier
@@ -201,13 +223,18 @@ fun SearchScreen(
                             ) {
                                 Icon(
                                     imageVector = Icons.Filled.Search,
-                                    contentDescription = null,
+                                    contentDescription = stringResource(R.string.search_cd),
                                     tint = if (state.query.isNotEmpty()) {
                                         MaterialTheme.colorScheme.primary
                                     } else {
                                         MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.70f)
                                     },
-                                    modifier = Modifier.size(20.dp),
+                                    modifier = Modifier
+                                        .size(20.dp)
+                                        .clickable(enabled = state.query.isNotBlank()) {
+                                            focusManager.clearFocus()
+                                            viewModel.searchNow()
+                                        },
                                 )
                                 Spacer(Modifier.width(10.dp))
                                 Box(
@@ -216,8 +243,8 @@ fun SearchScreen(
                                 ) {
                                     if (state.query.isEmpty()) {
                                         Text(
-                                            text = if (state.tab == SearchTab.USERS) "Search Last.fm users\u2026"
-                                            else "Search YouTube Music\u2026",
+                                            text = if (state.tab == SearchTab.USERS) stringResource(R.string.search_hint_users)
+                                            else stringResource(R.string.search_hint_yt),
                                             style = MaterialTheme.typography.bodyMedium,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.74f),
                                             maxLines = 1,
@@ -233,7 +260,7 @@ fun SearchScreen(
                                     ) {
                                         Icon(
                                             Icons.Filled.Clear,
-                                            contentDescription = "Clear",
+                                            contentDescription = stringResource(R.string.search_clear_cd),
                                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                             modifier = Modifier.size(18.dp),
                                         )
@@ -271,6 +298,35 @@ fun SearchScreen(
                         ),
                         modifier = Modifier.fillMaxSize(),
                     ) {
+                        item(key = "explicit_direct_search") {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        focusManager.clearFocus()
+                                        viewModel.searchNow()
+                                    }
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Search,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                                Spacer(Modifier.width(16.dp))
+                                Text(
+                                    text = "Search for \"${state.query.trim()}\"",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+
                         if (matchingRecent.isNotEmpty()) {
                             items(matchingRecent, key = { "recent_match_$it" }) { recentText ->
                                 SuggestionRow(
@@ -320,13 +376,13 @@ fun SearchScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                 ) {
                                     Text(
-                                        "Recent searches",
+                                        stringResource(R.string.search_recent),
                                         style = MaterialTheme.typography.titleSmall,
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                     TextButton(onClick = viewModel::clearRecentSearches) {
-                                        Text("Clear all", style = MaterialTheme.typography.labelMedium)
+                                        Text(stringResource(R.string.search_clear_all), style = MaterialTheme.typography.labelMedium)
                                     }
                                 }
                             }
@@ -363,7 +419,7 @@ fun SearchScreen(
                                     )
                                     Spacer(Modifier.width(8.dp))
                                     Text(
-                                        "Explore genres & moods",
+                                        stringResource(R.string.search_explore),
                                         style = MaterialTheme.typography.titleSmall,
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -415,7 +471,7 @@ fun SearchScreen(
                                         modifier = Modifier.size(44.dp),
                                     )
                                     Spacer(Modifier.height(10.dp))
-                                    Text("No results found for \"${state.query}\"", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(stringResource(R.string.search_no_results, state.query), color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
                             SearchStatus.RESULTS -> {
@@ -712,7 +768,7 @@ private fun SuggestionRow(
         ) {
             Icon(
                 Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Insert into search bar",
+                contentDescription = stringResource(R.string.search_insert_cd),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 modifier = Modifier
                     .size(18.dp)
@@ -787,7 +843,7 @@ private fun RecentSearchRow(
         ) {
             Icon(
                 Icons.Filled.Close,
-                contentDescription = "Remove from history",
+                contentDescription = stringResource(R.string.search_remove_cd),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 modifier = Modifier.size(18.dp),
             )
@@ -871,10 +927,10 @@ private fun SearchResultRow(
         }
         if (tab == SearchTab.USERS) {
             IconButton(onClick = { openLastFm("/+addfriend") }) {
-                Icon(Icons.Filled.PersonAdd, contentDescription = "Follow ${item.name} on Last.fm")
+                Icon(Icons.Filled.PersonAdd, contentDescription = stringResource(R.string.search_follow_cd, item.name))
             }
             IconButton(onClick = { openLastFm("/+removefriend") }) {
-                Icon(Icons.Filled.PersonRemove, contentDescription = "Unfollow ${item.name} on Last.fm")
+                Icon(Icons.Filled.PersonRemove, contentDescription = stringResource(R.string.search_unfollow_cd, item.name))
             }
         } else if (tab != SearchTab.PLAYLISTS) {
             com.lastwave.app.ui.common.OverflowMenuButton(onClick = onMenu)
@@ -889,11 +945,11 @@ private fun SearchFilterPills(
     modifier: Modifier = Modifier,
 ) {
     val tabs = listOf(
-        SearchTab.TRACKS to "Tracks",
-        SearchTab.ARTISTS to "Artists",
-        SearchTab.ALBUMS to "Albums",
-        SearchTab.PLAYLISTS to "Playlists",
-        SearchTab.USERS to "Users",
+        SearchTab.TRACKS to R.string.search_tab_tracks,
+        SearchTab.ARTISTS to R.string.search_tab_artists,
+        SearchTab.ALBUMS to R.string.search_tab_albums,
+        SearchTab.PLAYLISTS to R.string.search_tab_playlists,
+        SearchTab.USERS to R.string.search_tab_users,
     )
     Row(
         modifier = modifier
@@ -902,7 +958,7 @@ private fun SearchFilterPills(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        tabs.forEach { (tab, label) ->
+        tabs.forEach { (tab, labelRes) ->
             val selected = selectedTab == tab
             val interactionSource = remember { MutableInteractionSource() }
 
@@ -928,7 +984,7 @@ private fun SearchFilterPills(
                     ),
             ) {
                 Text(
-                    text = label,
+                    text = stringResource(labelRes),
                     style = MaterialTheme.typography.labelLarge.copy(
                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                     ),
