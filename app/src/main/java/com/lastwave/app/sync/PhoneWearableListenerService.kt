@@ -110,13 +110,13 @@ class PhoneWearableListenerService : WearableListenerService() {
                                     items.add(WearTrackItem(id = it.videoId ?: it.title, title = it.title, artist = it.artist, album = it.album ?: "", artworkUrl = it.artworkUrl, durationMs = it.durationMs ?: 0L))
                                 }
                                 liked.forEach {
-                                    items.add(WearTrackItem(id = it.videoId ?: it.title, title = it.title, artist = it.artist, album = it.album ?: "", artworkUrl = it.artworkUrl, durationMs = it.durationMs ?: 0L))
+                                    items.add(it.toWearTrackItem())
                                 }
                                 downloaded.forEach {
-                                    items.add(WearTrackItem(id = it.trackKey, title = it.title, artist = it.artist, album = it.album, artworkUrl = it.artworkUrl, durationMs = it.durationMs, streamUrl = it.filePath, isLossless = true, qualityBadge = "Downloaded FLAC"))
+                                    items.add(it.toWearTrackItem())
                                 }
                                 allPlaylists.forEach {
-                                    items.add(WearTrackItem(id = it.videoId ?: it.title, title = it.title, artist = it.artist, album = it.album ?: "", artworkUrl = it.artworkUrl, durationMs = it.durationMs ?: 0L))
+                                    items.add(it.toWearTrackItem())
                                 }
                                 items.distinctBy { it.id }.shuffled().take(25)
                             }
