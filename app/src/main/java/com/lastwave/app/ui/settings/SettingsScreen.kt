@@ -36,6 +36,7 @@ import androidx.compose.ui.text.withStyle
 import com.lastwave.app.ui.common.HeaderActionIcon
 import android.content.Intent
 import android.net.Uri
+import com.google.android.gms.wearable.Node
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
@@ -131,6 +132,7 @@ import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Watch
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -297,6 +299,12 @@ private fun getTargetSectionIndex(settingId: String?): Int {
             "Canvas" -> 3
             else -> 0
         }
+        SettingsTab.WEAR_OS -> when (entry.section) {
+            "Sync & Communication" -> 1
+            "Wear OS Features" -> 2
+            "Installation & Setup Guide" -> 3
+            else -> 0
+        }
         SettingsTab.LIBRARY -> when (entry.section) {
             "Imports" -> 1
             "Modules & Addons" -> 2
@@ -389,6 +397,11 @@ enum class SettingsTab(
         subtitle = "Account connection, 24/7 Library sync, Channels, History",
         icon = Icons.Filled.CloudSync,
     ),
+    WEAR_OS(
+        title = "Wear OS Watch",
+        subtitle = "Connected smartwatches, Real-time playback bridge, Sync diagnostics",
+        icon = Icons.Filled.Watch,
+    ),
     LAST_FM(
         title = "Last.fm",
         subtitle = "Account connection, Scrobbling sync & API credentials",
@@ -452,6 +465,8 @@ fun SettingsScreen(
     val hasApiKey by viewModel.hasApiKey.collectAsStateWithLifecycle()
     val lastFmAuthUrl by viewModel.lastFmAuthUrl.collectAsStateWithLifecycle()
     val lastFmConnecting by viewModel.lastFmConnecting.collectAsStateWithLifecycle()
+    val connectedWatches by viewModel.connectedWatches.collectAsStateWithLifecycle()
+    val watchLastSyncTimestamp by viewModel.watchLastSyncTimestamp.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     // Last.fm web auth (Settings → Integrations): open the auth URL in Custom
@@ -482,6 +497,13 @@ fun SettingsScreen(
     var showYtDisconnectConfirm by remember { mutableStateOf(false) }
     var showLanguageDialog by remember { mutableStateOf(false) }
     val currentLanguage = remember(misc.appLanguageTag) { AppLanguage.fromTag(misc.appLanguageTag) }
+
+    val watchStorageCap by viewModel.watchStorageCap.collectAsStateWithLifecycle()
+    var selectedWatchForDiagnostics by remember { mutableStateOf<Node?>(null) }
+    var showWatchStorageCapDialog by remember { mutableStateOf(false) }
+    var showWatchRemoteInfoDialog by remember { mutableStateOf(false) }
+    var showWatchAudioQualityDialog by remember { mutableStateOf(false) }
+    var showWatchRotaryDialog by remember { mutableStateOf(false) }
 
     // Sends the user to Android's own Notification Listener access screen
     // — the one permission this feature needs that the app can never grant
@@ -534,6 +556,12 @@ fun SettingsScreen(
             if (highlightedSettingId != null) {
                 delay(3200L)
                 highlightedSettingId = null
+            }
+        }
+
+        LaunchedEffect(activeTab) {
+            if (activeTab == SettingsTab.WEAR_OS) {
+                viewModel.refreshWatches()
             }
         }
 
@@ -658,7 +686,7 @@ fun SettingsScreen(
                         item {
                             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                 SectionLabel("Services & Add-ons")
-                                SettingsGroup(rowCount = 3) { index, position ->
+                                SettingsGroup(rowCount = 4) { index, position ->
                                     when (index) {
                                         0 -> SettingsActionCard(
                                             icon = Icons.Filled.Extension,
@@ -671,9 +699,21 @@ fun SettingsScreen(
                                             isHighlighted = (highlightedSettingId == "services.modules" || highlightedSettingId == "library.modules"),
                                         )
                                         1 -> SettingsActionCard(
-                                            icon = Icons.Filled.Album,
+                                            icon = Icons.Filled.Watch,
                                             iconContainer = MaterialTheme.colorScheme.primaryContainer,
                                             iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            title = "Wear OS Watch",
+                                            subtitle = if (connectedWatches.isNotEmpty()) "${connectedWatches.size} watch connected • Live sync active" else "Real-time sync, companion remote & diagnostics",
+                                            onClick = {
+                                                viewModel.refreshWatches()
+                                                activeTab = SettingsTab.WEAR_OS
+                                            },
+                                            position = position,
+                                        )
+                                        2 -> SettingsActionCard(
+                                            icon = Icons.Filled.Album,
+                                            iconContainer = MaterialTheme.colorScheme.secondaryContainer,
+                                            iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
                                             title = "Last.fm",
                                             subtitle = if (isLastFmConnected) "Connected as ${session.username} \u2022 Scrobbling active" else "Connect account, scrobbles & statistics sync",
                                             onClick = { activeTab = SettingsTab.LAST_FM },
@@ -681,8 +721,8 @@ fun SettingsScreen(
                                         )
                                         else -> SettingsActionCard(
                                             icon = Icons.Filled.CloudSync,
-                                            iconContainer = MaterialTheme.colorScheme.secondaryContainer,
-                                            iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            iconContainer = MaterialTheme.colorScheme.tertiaryContainer,
+                                            iconTint = MaterialTheme.colorScheme.onTertiaryContainer,
                                             title = "YouTube & Sync",
                                             subtitle = if (ytConnection.isConnected) "Connected as ${ytConnection.accountName} \u2022 24/7 sync" else "Connect account, 24/7 playlist sync, channels",
                                             onClick = { activeTab = SettingsTab.YOUTUBE },
@@ -1442,6 +1482,172 @@ fun SettingsScreen(
             }
                     }
 
+                    SettingsTab.WEAR_OS -> {
+                        item {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                SectionLabel("Connected Smartwatches")
+                                if (connectedWatches.isNotEmpty()) {
+                                    SettingsGroup(rowCount = connectedWatches.size) { index, position ->
+                                        val node = connectedWatches[index]
+                                        WearWatchNodeCard(
+                                            node = node,
+                                            position = position,
+                                            onClick = { selectedWatchForDiagnostics = node },
+                                            isHighlighted = (highlightedSettingId == "wear.devices"),
+                                        )
+                                    }
+                                } else {
+                                    WearNoWatchCard()
+                                }
+                            }
+                        }
+
+                        item {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                SectionLabel("Sync & Communication")
+                                SettingsGroup(rowCount = 2) { index, position ->
+                                    when (index) {
+                                        0 -> SettingsActionCard(
+                                            icon = Icons.Filled.CloudSync,
+                                            iconContainer = MaterialTheme.colorScheme.primaryContainer,
+                                            iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            title = "Sync Playback State Now",
+                                            subtitle = if (watchLastSyncTimestamp != null) {
+                                                "Last synced ${relativeTime(watchLastSyncTimestamp!!)}"
+                                            } else {
+                                                "Broadcast current track, status & artwork to watch"
+                                            },
+                                            onClick = { viewModel.syncWatchNow() },
+                                            position = position,
+                                            isHighlighted = (highlightedSettingId == "wear.sync"),
+                                        )
+                                        else -> SettingsActionCard(
+                                            icon = Icons.Filled.RestartAlt,
+                                            iconContainer = MaterialTheme.colorScheme.secondaryContainer,
+                                            iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            title = "Scan for Connected Watches",
+                                            subtitle = if (connectedWatches.isNotEmpty()) {
+                                                "${connectedWatches.size} watch(es) discovered via Bluetooth / Wi-Fi"
+                                            } else {
+                                                "Tap to discover paired smartwatches"
+                                            },
+                                            onClick = { viewModel.refreshWatches() },
+                                            position = position,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        item {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                SectionLabel("Wear OS Features")
+                                SettingsGroup(rowCount = 4) { index, position ->
+                                    when (index) {
+                                        0 -> SettingsActionCard(
+                                            icon = Icons.Filled.PlayCircle,
+                                            iconContainer = MaterialTheme.colorScheme.primaryContainer,
+                                            iconTint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            title = "Live Remote Control",
+                                            subtitle = "Control playback, browse tracks & see real-time progress on wrist",
+                                            onClick = { showWatchRemoteInfoDialog = true },
+                                            position = position,
+                                            isHighlighted = (highlightedSettingId == "wear.features"),
+                                        )
+                                        1 -> SettingsActionCard(
+                                            icon = Icons.Filled.HighQuality,
+                                            iconContainer = MaterialTheme.colorScheme.tertiaryContainer,
+                                            iconTint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                            title = "Standalone Watch Audio",
+                                            subtitle = "Stream charts & play cached songs directly on watch with Bluetooth earbuds",
+                                            onClick = { showWatchAudioQualityDialog = true },
+                                            position = position,
+                                        )
+                                        2 -> SettingsActionCard(
+                                            icon = Icons.Filled.VolumeUp,
+                                            iconContainer = MaterialTheme.colorScheme.secondaryContainer,
+                                            iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            title = "Rotary Crown Navigation",
+                                            subtitle = "Rotate watch bezel or crown for precise volume & track scrubbing",
+                                            onClick = { showWatchRotaryDialog = true },
+                                            position = position,
+                                        )
+                                        else -> SettingsActionCard(
+                                            icon = Icons.Filled.Backup,
+                                            iconContainer = MaterialTheme.colorScheme.surfaceVariant,
+                                            iconTint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            title = "Storage Cap Protection",
+                                            subtitle = "${watchStorageCap / 1_000_000L} MB limit active • Tap to configure limit",
+                                            onClick = { showWatchStorageCapDialog = true },
+                                            position = position,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        item {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                SectionLabel("Installation & Setup Guide")
+                                Card(
+                                    shape = CardOuterShape,
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                    ),
+                                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(18.dp),
+                                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(42.dp)
+                                                    .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                                                contentAlignment = Alignment.Center,
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Filled.Watch,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                    modifier = Modifier.size(22.dp),
+                                                )
+                                            }
+                                            Column {
+                                                Text(
+                                                    text = "Installing LastWave on Wear OS",
+                                                    style = MaterialTheme.typography.titleMedium,
+                                                    fontWeight = FontWeight.Bold,
+                                                )
+                                                Text(
+                                                    text = "Wear OS 3.0+ (Galaxy Watch 4/5/6/7, Pixel Watch 1/2/3)",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
+                                        }
+
+                                        Text(
+                                            text = "1. Enable 'Developer options' and 'Wireless debugging' on your watch.\n" +
+                                                   "2. Sideload the Wear APK (wear-debug.apk) via ADB or local browser.\n" +
+                                                   "3. Open LastWave on your watch to connect with your phone immediately.",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            lineHeight = 22.sp,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     SettingsTab.LAST_FM -> {
                         item {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -2092,6 +2298,38 @@ fun SettingsScreen(
             },
             onDismiss = { showYtChannelSheet = false },
         )
+    }
+
+    selectedWatchForDiagnostics?.let { watchNode ->
+        WatchDiagnosticsDialog(
+            node = watchNode,
+            onPing = { viewModel.pingWatch(watchNode.id) },
+            onSync = { viewModel.syncWatchNow() },
+            onDismiss = { selectedWatchForDiagnostics = null },
+        )
+    }
+
+    if (showWatchStorageCapDialog) {
+        WatchStorageCapDialog(
+            currentCapBytes = watchStorageCap,
+            onSelectCap = { newCap ->
+                viewModel.setWatchStorageCap(newCap)
+                showWatchStorageCapDialog = false
+            },
+            onDismiss = { showWatchStorageCapDialog = false },
+        )
+    }
+
+    if (showWatchRemoteInfoDialog) {
+        WatchRemoteInfoDialog(onDismiss = { showWatchRemoteInfoDialog = false })
+    }
+
+    if (showWatchAudioQualityDialog) {
+        WatchAudioQualityDialog(onDismiss = { showWatchAudioQualityDialog = false })
+    }
+
+    if (showWatchRotaryDialog) {
+        WatchRotaryDialog(onDismiss = { showWatchRotaryDialog = false })
     }
 
     if (showQualityDialog) {
@@ -5161,3 +5399,369 @@ private fun LyricsAnimationSheet(
         }
     }
 }
+
+@Composable
+private fun WearWatchNodeCard(
+    node: Node,
+    position: GroupPosition = GroupPosition.SINGLE,
+    onClick: () -> Unit = {},
+    isHighlighted: Boolean = false,
+) {
+    val shape = groupShape(position)
+    Card(
+        onClick = onClick,
+        shape = shape,
+        colors = CardDefaults.cardColors(
+            containerColor = if (isHighlighted) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f) else MaterialTheme.colorScheme.surfaceContainerHigh,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .settingHighlightGlow(isHighlighted = isHighlighted, shape = shape),
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconBadge(
+                Icons.Filled.Watch,
+                MaterialTheme.colorScheme.primaryContainer,
+                MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        node.displayName,
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Surface(
+                        shape = CircleShape,
+                        color = if (node.isNearby) Color(0xFF4CAF50).copy(alpha = 0.15f) else MaterialTheme.colorScheme.primaryContainer,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .background(
+                                        if (node.isNearby) Color(0xFF4CAF50) else MaterialTheme.colorScheme.primary,
+                                        CircleShape,
+                                    )
+                            )
+                            Text(
+                                if (node.isNearby) "Nearby (BT)" else "Cloud / Wi-Fi",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = if (node.isNearby) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                        }
+                    }
+                }
+                Text(
+                    "Node ID: ${node.id.take(12)}... • Tap for diagnostics & tests",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WearNoWatchCard() {
+    Card(
+        shape = CardOuterShape,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(46.dp)
+                    .background(MaterialTheme.colorScheme.surfaceContainerHighest, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Watch,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "No Watch Connected",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    "Ensure Bluetooth is on and your watch is paired with this phone. Then tap 'Scan for Connected Watches' below.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 18.sp,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WatchStorageCapDialog(
+    currentCapBytes: Long,
+    onSelectCap: (Long) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val options = listOf(
+        Pair(com.lastwave.core.sync.WearCachePreferences.CAP_500_MB, "500 MB (Default • Recommended)"),
+        Pair(com.lastwave.core.sync.WearCachePreferences.CAP_1_GB, "1 GB"),
+        Pair(com.lastwave.core.sync.WearCachePreferences.CAP_2_GB, "2 GB"),
+        Pair(com.lastwave.core.sync.WearCachePreferences.CAP_4_GB, "4 GB"),
+        Pair(Long.MAX_VALUE, "Unlimited (Keep until storage low)"),
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text("Watch Storage Cache Limit", fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Typical smartwatches have limited internal storage. When the cache exceeds this limit, older songs are automatically cleared to free up space.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+                options.forEach { (bytes, label) ->
+                    val isSelected = (currentCapBytes == bytes) || (bytes == Long.MAX_VALUE && currentCapBytes > 4_000_000_000L)
+                    Surface(
+                        onClick = { onSelectCap(bytes) },
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            RadioButton(
+                                selected = isSelected,
+                                onClick = { onSelectCap(bytes) },
+                            )
+                            Text(
+                                label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
+}
+
+@Composable
+private fun WatchDiagnosticsDialog(
+    node: Node,
+    onPing: () -> Unit,
+    onSync: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Watch,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Text(node.displayName, fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            "Connection: ${if (node.isNearby) "Nearby Bluetooth (Direct, Fast)" else "Cloud / Wi-Fi Relay"}",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            "Node ID: ${node.id}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                Text(
+                    "You can test communication by sending an instant vibration ping to the watch, or push the current song and album artwork immediately.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FilledTonalButton(
+                        onClick = onPing,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Test Ping Watch", fontSize = 12.sp)
+                    }
+                    Button(
+                        onClick = onSync,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Sync Now", fontSize = 12.sp)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        },
+    )
+}
+
+@Composable
+private fun WatchRemoteInfoDialog(
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text("Live Remote Control", fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "The LastWave Wear OS app operates as a low-latency companion remote control for this phone.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "• Full Playback Transport: Play, pause, skip, and scrub tracks from your wrist.\n" +
+                    "• High-Res Artwork: Lossless album art mirrors smoothly to the round OLED watch screen.\n" +
+                    "• Bi-directional Sync: Changes on the phone update on the watch immediately, and wrist taps control the phone in real time.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 20.sp,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Got It")
+            }
+        },
+    )
+}
+
+@Composable
+private fun WatchAudioQualityDialog(
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text("Standalone Watch Audio", fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "LastWave on Wear OS is a complete standalone music player. You can connect Bluetooth earbuds directly to your smartwatch and go for a run without taking your phone.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "• Lossless FLAC decoding directly on the watch hardware.\n" +
+                    "• Dynamic caching with customizable storage caps to prevent filling watch storage.\n" +
+                    "• Background playback service with persistent ongoing media notification.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 20.sp,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Got It")
+            }
+        },
+    )
+}
+
+@Composable
+private fun WatchRotaryDialog(
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text("Rotary Crown Navigation", fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "LastWave utilizes Wear OS Rotary Scroll APIs for tactile physical navigation.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "• Rotating the physical bezel on Samsung Galaxy Watch 4/5/6/7 adjusts phone volume smoothly.\n" +
+                    "• Rotating the digital crown on Google Pixel Watch 1/2/3 scrolls smoothly through playlists and tracks with mechanical haptic tick feedback.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    lineHeight = 20.sp,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Got It")
+            }
+        },
+    )
+}
+

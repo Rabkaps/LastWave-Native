@@ -1,0 +1,79 @@
+plugins {
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
+}
+
+android {
+    namespace 'com.lastwave.wear'
+    compileSdk 37
+
+    defaultConfig {
+        applicationId 'com.lastwave.wear'
+        minSdk 30
+        targetSdk 35
+        versionCode 1
+        versionName '1.0.0'
+
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug {
+            debuggable true
+            applicationIdSuffix '.debug'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    buildFeatures {
+        compose true
+    }
+}
+
+dependencies {
+    implementation project(':core')
+
+    // Wear OS Compose & Material 3
+    implementation libs.androidx.wear.compose.foundation
+    implementation libs.androidx.wear.compose.material3
+    implementation libs.androidx.wear.compose.navigation
+
+    // Wear OS Tiles & Complications
+    implementation libs.androidx.wear.tiles
+    implementation libs.androidx.wear.tiles.material
+    implementation libs.androidx.wear.watchface.complications.data.source
+
+    // Wearable Data Layer (Sync with Phone)
+    implementation libs.play.services.wearable
+
+    // Media3 ExoPlayer (Playback & Lossless Decoding)
+    implementation libs.media3.exoplayer
+    implementation libs.media3.session
+    implementation libs.media3.datasource
+    implementation libs.media3.ui
+
+    // Image Loading
+    implementation libs.coil.compose
+
+    // Architecture & Lifecycle
+    implementation libs.androidx.core.ktx
+    implementation libs.androidx.lifecycle.runtime.ktx
+    implementation libs.androidx.lifecycle.viewmodel.compose
+    implementation libs.androidx.lifecycle.runtime.compose
+    implementation libs.androidx.activity.compose
+
+    // Coroutines & Serialization
+    implementation libs.kotlinx.coroutines.android
+    implementation libs.kotlinx.serialization.json
+}

@@ -94,6 +94,7 @@ class MusicPlaybackService : MediaBrowserServiceCompat() {
     @Inject lateinit var themeRepository: ThemeRepository
     @Inject lateinit var artworkRepository: com.lastwave.app.data.artwork.ArtworkRepository
     @Inject lateinit var androidAutoLibrary: AndroidAutoMediaLibrary
+    @Inject lateinit var phoneWearableBridge: com.lastwave.app.sync.PhoneWearableBridge
 
     // SupervisorJob stops sibling failure propagation; the handler below
     // additionally stops an unexpected exception in any fire-and-forget
@@ -282,6 +283,7 @@ class MusicPlaybackService : MediaBrowserServiceCompat() {
                 notifyCarLibraryChanged(AndroidAutoMediaLibrary.DOWNLOADS_ID)
             }
         }
+        phoneWearableBridge.startSync(scope)
         startDetector()
     }
 

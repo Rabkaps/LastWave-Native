@@ -1,19 +1,9 @@
 pluginManagement {
-    buildscript {
-        repositories {
-            google()
-            mavenCentral()
-            maven { url = uri("https://storage.googleapis.com/r8-releases/raw") }
-        }
-        dependencies {
-            classpath("com.android.tools:r8:9.4.14")
-        }
-    }
     repositories {
         google()
         mavenCentral()
         gradlePluginPortal()
-        maven { url = uri("https://storage.googleapis.com/r8-releases/raw") }
+        maven { url = java.net.URI.create("https://storage.googleapis.com/r8-releases/raw") }
     }
 }
 dependencyResolutionManagement {
@@ -21,10 +11,12 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        maven("https://jitpack.io")
+        maven { url = java.net.URI.create("https://jitpack.io") }
     }
 }
 
 rootProject.name = "LastWave"
 include(":app")
+include(":core")
+include(":wear")
 include(":audio:decent-usb-audio-driver")

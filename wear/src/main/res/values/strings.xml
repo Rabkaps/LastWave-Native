@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">LastWave</string>
+    <string name="tile_now_playing">LastWave Now Playing</string>
+    <string name="tile_now_playing_desc">View and control currently playing track on LastWave</string>
+    <string name="complication_now_playing">LastWave Music</string>
+    <string name="no_track_playing">Not playing</string>
+    <string name="connecting_phone">Connecting to phone…</string>
+    <string name="storage_cache_title">Offline Cache Limit</string>
+    <string name="clear_cache">Clear Download Cache</string>
+</resources>

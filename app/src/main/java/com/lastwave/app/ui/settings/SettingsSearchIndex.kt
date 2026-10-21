@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Usb
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.Watch
 import androidx.compose.material.icons.filled.Waves
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -747,6 +748,61 @@ object SettingsSearchIndex {
                     parentTab = SettingsTab.YOUTUBE,
                     section = "YouTube & Sync",
                     type = EntryType.TOGGLE,
+                )
+            )
+
+            // ==========================================
+            // TAB: WEAR OS WATCH
+            // ==========================================
+            add(
+                SettingsEntry(
+                    id = "wear.devices",
+                    title = "Wear OS Connected Watches",
+                    subtitle = "Manage connected smartwatches, Bluetooth / Wi-Fi node status, and bidirectional sync",
+                    keywords = listOf(
+                        "wear", "wear os", "watch", "smartwatch", "galaxy watch", "pixel watch",
+                        "bluetooth", "connected watch", "wearable", "wear sync"
+                    ),
+                    icon = Icons.Filled.Watch,
+                    iconContainer = { MaterialTheme.colorScheme.primaryContainer },
+                    iconTint = { MaterialTheme.colorScheme.onPrimaryContainer },
+                    parentTab = SettingsTab.WEAR_OS,
+                    section = "Connected Smartwatches",
+                    type = EntryType.ACTION,
+                )
+            )
+            add(
+                SettingsEntry(
+                    id = "wear.sync",
+                    title = "Wear OS Live Sync",
+                    subtitle = "Real-time sync of track playback, album art, position, and auth credentials to watch",
+                    keywords = listOf(
+                        "wear sync", "watch sync", "sync now", "push to watch", "wearable sync",
+                        "playback sync", "smartwatch companion", "remote sync"
+                    ),
+                    icon = Icons.Filled.CloudSync,
+                    iconContainer = { MaterialTheme.colorScheme.secondaryContainer },
+                    iconTint = { MaterialTheme.colorScheme.onSecondaryContainer },
+                    parentTab = SettingsTab.WEAR_OS,
+                    section = "Sync & Communication",
+                    type = EntryType.ACTION,
+                )
+            )
+            add(
+                SettingsEntry(
+                    id = "wear.features",
+                    title = "Wear OS Features & Standalone Playback",
+                    subtitle = "Wrist remote control, rotary crown volume, synced lyrics, and standalone streaming",
+                    keywords = listOf(
+                        "rotary crown", "wrist remote", "standalone watch", "watch earbuds", "watch lyrics",
+                        "bezel", "crown volume", "galaxy watch crown"
+                    ),
+                    icon = Icons.Filled.VolumeUp,
+                    iconContainer = { MaterialTheme.colorScheme.tertiaryContainer },
+                    iconTint = { MaterialTheme.colorScheme.onTertiaryContainer },
+                    parentTab = SettingsTab.WEAR_OS,
+                    section = "Wear OS Features",
+                    type = EntryType.ACTION,
                 )
             )
 

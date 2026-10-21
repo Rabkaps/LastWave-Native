@@ -107,8 +107,44 @@ class SettingsViewModel @Inject constructor(
     val playlistImportManager: com.lastwave.app.data.playlist.PlaylistImportManager,
     val innerTube: com.lastwave.app.data.music.InnerTubeMusicApi,
     val appUpdateManager: com.lastwave.app.data.update.AppUpdateManager,
+    val phoneWearableBridge: com.lastwave.app.sync.PhoneWearableBridge,
     @dagger.hilt.android.qualifiers.ApplicationContext private val context: android.content.Context,
 ) : ViewModel() {
+
+    val connectedWatches = phoneWearableBridge.connectedWatches
+    val watchLastSyncTimestamp = phoneWearableBridge.lastSyncTimestamp
+
+    private val _watchStorageCap = MutableStateFlow(com.lastwave.core.sync.WearCachePreferences.CAP_500_MB)
+    val watchStorageCap = _watchStorageCap.asStateFlow()
+
+    fun setWatchStorageCap(capBytes: Long) {
+        _watchStorageCap.value = capBytes
+        viewModelScope.launch {
+            val success = phoneWearableBridge.setWatchStorageCap(capBytes)
+            val capMb = capBytes / 1_000_000L
+            showToast(if (success) "Watch cache limit set to $capMb MB" else "Watch not reachable; setting queued")
+        }
+    }
+
+    fun pingWatch(nodeId: String) {
+        viewModelScope.launch {
+            val success = phoneWearableBridge.sendPingToWatch(nodeId)
+            showToast(if (success) "Ping signal sent to watch!" else "Could not reach watch")
+        }
+    }
+
+    fun syncWatchNow() {
+        viewModelScope.launch {
+            val success = phoneWearableBridge.syncNow()
+            showToast(if (success) "Synced playback with Wear OS watch" else "Could not reach watch")
+        }
+    }
+
+    fun refreshWatches() {
+        viewModelScope.launch {
+            phoneWearableBridge.refreshConnectedWatches()
+        }
+    }
 
     val authState: StateFlow<com.lastwave.app.data.model.AuthState> = authRepository.authState
     val updateInfo = appUpdateManager.updateInfo

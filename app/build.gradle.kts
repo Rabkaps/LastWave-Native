@@ -186,6 +186,8 @@ android {
 }
 
 dependencies {
+    implementation(project(":core"))
+    implementation(libs.play.services.wearable)
     implementation("com.google.android.gms:play-services-cast-framework:22.3.1")
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     implementation(libs.androidx.core.ktx)
