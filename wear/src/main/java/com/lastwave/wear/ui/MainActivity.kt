@@ -229,30 +229,38 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun playTrackOnWatch(track: com.lastwave.core.sync.WearTrackItem) {
-        var playableUrl = track.streamUrl
-        if (playableUrl.isNullOrBlank() || !playableUrl.startsWith("http")) {
-            val response = syncClient.requestStreamResolveFromPhone(
-                songId = track.id,
-                title = track.title,
-                artist = track.artist
-            )
-            playableUrl = response?.streamUrl
-        }
-
-        if (!playableUrl.isNullOrBlank()) {
-            val mediaItem = MediaItem.Builder()
-                .setMediaId(track.id)
-                .setUri(playableUrl)
-                .setMediaMetadata(
-                    MediaMetadata.Builder()
-                        .setTitle(track.title)
-                        .setArtist(track.artist)
-                        .setAlbumTitle(track.album)
-                        .setArtworkUri(track.artworkUrl?.let { Uri.parse(it) })
-                        .build()
+        try {
+            var playableUrl = track.streamUrl
+            var mimeType: String? = null
+            if (playableUrl.isNullOrBlank() || !playableUrl.startsWith("http")) {
+                val response = syncClient.requestStreamResolveFromPhone(
+                    songId = track.id,
+                    title = track.title,
+                    artist = track.artist
                 )
-                .build()
-            WearPlaybackService.playTrack(mediaItem)
+                playableUrl = response?.streamUrl
+                mimeType = response?.mimeType
+            }
+
+            if (!playableUrl.isNullOrBlank()) {
+                val mediaItemBuilder = MediaItem.Builder()
+                    .setMediaId(track.id)
+                    .setUri(playableUrl)
+                    .setMediaMetadata(
+                        MediaMetadata.Builder()
+                            .setTitle(track.title)
+                            .setArtist(track.artist)
+                            .setAlbumTitle(track.album)
+                            .setArtworkUri(track.artworkUrl?.let { Uri.parse(it) })
+                            .build()
+                    )
+                if (!mimeType.isNullOrBlank()) {
+                    mediaItemBuilder.setMimeType(mimeType)
+                }
+                WearPlaybackService.playTrack(mediaItemBuilder.build())
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error playing track on watch: ${e.message}", e)
         }
     }
 }
