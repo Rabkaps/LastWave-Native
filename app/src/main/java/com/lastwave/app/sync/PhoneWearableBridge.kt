@@ -14,7 +14,9 @@ import com.lastwave.app.data.local.db.DownloadedTrackEntity
 import com.lastwave.app.data.playlist.PlaylistRepository
 import com.lastwave.app.data.playlist.isYouTubeOnly
 import com.lastwave.app.playback.MusicPlayer
+import com.lastwave.app.playback.PlayableTrack
 import com.lastwave.app.playback.qualityBadgeLabel
+import com.lastwave.core.sync.WearStreamResolveResponse
 import com.lastwave.core.sync.WearAuthSession
 import com.lastwave.core.sync.WearPlaybackState
 import com.lastwave.core.sync.WearPlaylistItem
@@ -314,6 +316,32 @@ class PhoneWearableBridge @Inject constructor(
                     Pair("Playlist", emptyList())
                 }
             }
+        }
+    }
+
+    suspend fun resolveStreamForWatch(
+        songId: String,
+        title: String = "",
+        artist: String = ""
+    ): WearStreamResolveResponse = withContext(Dispatchers.IO) {
+        try {
+            val playable = PlayableTrack(
+                title = title.ifBlank { "Track" },
+                artist = artist.ifBlank { "Artist" },
+                videoId = songId
+            )
+            val resolved = musicPlayer.resolveCastStream(playable)
+            WearStreamResolveResponse(
+                songId = songId,
+                streamUrl = resolved.url,
+                mimeType = resolved.mimeType,
+                isLossless = resolved.isLossless
+            )
+        } catch (e: Exception) {
+            WearStreamResolveResponse(
+                songId = songId,
+                error = e.message ?: "Failed to resolve stream"
+            )
         }
     }
 

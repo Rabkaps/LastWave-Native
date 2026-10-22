@@ -13,6 +13,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import android.content.Intent
+import android.provider.Settings
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,6 +40,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val usedMb = stats.usedCacheBytes / 1_000_000L
     val maxMb = selectedCapBytes / 1_000_000L
     val freeDiskMb = stats.availableDiskBytes / 1_000_000L
@@ -58,6 +62,45 @@ fun SettingsScreen(
                     .clickable { onBack() }
                     .padding(bottom = 4.dp)
             )
+        }
+
+        item {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFF1E2838))
+                    .clickable {
+                        runCatching {
+                            val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            context.startActivity(intent)
+                        }
+                    }
+                    .padding(horizontal = 10.dp, vertical = 7.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Text(
+                            text = "🎧 Bluetooth Audio",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF82B1FF)
+                        )
+                        Text(
+                            text = "Pair watch earbuds",
+                            fontSize = 8.sp,
+                            color = Color.LightGray
+                        )
+                    }
+                    Text(text = "→", fontSize = 11.sp, color = Color(0xFF82B1FF))
+                }
+            }
         }
 
         item {

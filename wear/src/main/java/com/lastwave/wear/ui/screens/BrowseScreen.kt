@@ -58,9 +58,9 @@ data class WatchSongItem(
 @Composable
 fun BrowseScreen(
     isCompanionMode: Boolean = true,
-    onPlayTrack: (WatchSongItem) -> Unit,
-    onPlayPhoneTrack: (WearTrackItem) -> Unit = {},
-    onPlayPlaylist: (String) -> Unit = {},
+    onToggleCompanionMode: () -> Unit = {},
+    onPlayTrack: (WearTrackItem) -> Unit = {},
+    onPlayPlaylist: (String, List<WearTrackItem>) -> Unit = { _, _ -> },
     onPlayRadio: (String) -> Unit = {},
     onBack: () -> Unit,
     modifier: Modifier = Modifier
@@ -119,11 +119,20 @@ fun BrowseScreen(
                             color = Color(0xFFC6F100),
                             modifier = Modifier.clickable { activePlaylistDetail = null }
                         )
-                        Text(
-                            text = "${tracks.size} tracks",
-                            fontSize = 10.sp,
-                            color = Color.LightGray
-                        )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (isCompanionMode) Color(0xFF2E3A1C) else Color(0xFF1E2838))
+                                .clickable { onToggleCompanionMode() }
+                                .padding(horizontal = 7.dp, vertical = 3.dp)
+                        ) {
+                            Text(
+                                text = if (isCompanionMode) "📱 PHONE" else "⌚ WATCH",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isCompanionMode) Color(0xFFC6F100) else Color(0xFF82B1FF)
+                            )
+                        }
                     }
                 }
 
@@ -149,7 +158,7 @@ fun BrowseScreen(
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(Color(0xFFC6F100))
                                 .clickable {
-                                    onPlayPlaylist(activePlaylist.id)
+                                    onPlayPlaylist(activePlaylist.id, tracks)
                                 }
                                 .padding(horizontal = 14.dp, vertical = 6.dp)
                         ) {
@@ -187,7 +196,7 @@ fun BrowseScreen(
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(Color(0xFF161616))
-                                .clickable { onPlayPhoneTrack(track) }
+                                .clickable { onPlayTrack(track) }
                                 .padding(horizontal = 8.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -265,12 +274,20 @@ fun BrowseScreen(
                             color = Color(0xFFC6F100),
                             modifier = Modifier.clickable { onBack() }
                         )
-                        Text(
-                            text = "Music Library",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color.LightGray
-                        )
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (isCompanionMode) Color(0xFF2E3A1C) else Color(0xFF1E2838))
+                                .clickable { onToggleCompanionMode() }
+                                .padding(horizontal = 7.dp, vertical = 3.dp)
+                        ) {
+                            Text(
+                                text = if (isCompanionMode) "📱 PHONE" else "⌚ WATCH",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isCompanionMode) Color(0xFFC6F100) else Color(0xFF82B1FF)
+                            )
+                        }
                     }
                 }
 
@@ -553,7 +570,7 @@ fun BrowseScreen(
                                         .fillMaxWidth()
                                         .clip(RoundedCornerShape(12.dp))
                                         .background(Color(0xFF161616))
-                                        .clickable { onPlayPhoneTrack(track) }
+                                        .clickable { onPlayTrack(track) }
                                         .padding(horizontal = 8.dp, vertical = 6.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {

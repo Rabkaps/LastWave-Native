@@ -124,6 +124,22 @@ class PhoneWearableListenerService : WearableListenerService() {
                             messageClient.sendMessage(sourceNodeId, WearableProtocol.PATH_QUICK_MIX_RESPONSE, json.encodeToString(payload).toByteArray(Charsets.UTF_8))
                         }
 
+                        WearableProtocol.PATH_STREAM_RESOLVE_REQUEST -> {
+                            val raw = messageEvent.data.toString(Charsets.UTF_8)
+                            val req = json.decodeFromString<com.lastwave.core.sync.WearStreamResolveRequest>(raw)
+                            val resolvedResponse = phoneWearableBridge.resolveStreamForWatch(
+                                songId = req.songId,
+                                title = req.title,
+                                artist = req.artist
+                            )
+                            val payload = json.encodeToString(resolvedResponse).toByteArray(Charsets.UTF_8)
+                            messageClient.sendMessage(
+                                sourceNodeId,
+                                WearableProtocol.PATH_STREAM_RESOLVE_RESPONSE,
+                                payload
+                            )
+                        }
+
                         WearableProtocol.PATH_PING -> {
                             messageClient.sendMessage(sourceNodeId, WearableProtocol.PATH_PING_ACK, byteArrayOf())
                         }

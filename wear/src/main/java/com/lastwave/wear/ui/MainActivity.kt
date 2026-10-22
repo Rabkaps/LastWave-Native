@@ -75,10 +75,10 @@ class MainActivity : ComponentActivity() {
                         syncClient.requestQuickMixFromPhone()
                     }
 
-                    // If phone is actively playing or has active metadata, ensure companion mode
-                    LaunchedEffect(phoneState.title, phoneState.isPlaying) {
-                        if (phoneState.title.isNotBlank() || phoneState.isPlaying) {
-                            isCompanionMode = true
+                    // If local watch playback starts, switch target to watch
+                    LaunchedEffect(localState.isPlaying) {
+                        if (localState.isPlaying) {
+                            isCompanionMode = false
                         }
                     }
 
@@ -98,6 +98,8 @@ class MainActivity : ComponentActivity() {
                                     } else {
                                         when (action) {
                                             PlaybackCommand.Action.TOGGLE_PLAY_PAUSE -> WearPlaybackService.togglePlayPause()
+                                            PlaybackCommand.Action.PLAY -> WearPlaybackService.resume()
+                                            PlaybackCommand.Action.PAUSE -> WearPlaybackService.pause()
                                             PlaybackCommand.Action.SKIP_NEXT -> WearPlaybackService.skipNext()
                                             PlaybackCommand.Action.SKIP_PREVIOUS -> WearPlaybackService.skipPrevious()
                                             else -> {}
@@ -128,45 +130,62 @@ class MainActivity : ComponentActivity() {
                         WearScreen.BROWSE -> {
                             BrowseScreen(
                                 isCompanionMode = isCompanionMode,
-                                onPlayTrack = { song ->
-                                    isCompanionMode = false // Switch to standalone watch playback
-                                    val mediaItem = MediaItem.Builder()
-                                        .setMediaId(song.id)
-                                        .setUri(song.streamUrl)
-                                        .setMediaMetadata(
-                                            MediaMetadata.Builder()
-                                                .setTitle(song.title)
-                                                .setArtist(song.artist)
-                                                .setArtworkUri(song.artworkUrl?.let { Uri.parse(it) })
-                                                .build()
-                                        )
-                                        .build()
-                                    WearPlaybackService.playTrack(mediaItem)
-                                    currentScreen = WearScreen.NOW_PLAYING
-                                },
-                                onPlayPhoneTrack = { phoneTrack ->
-                                    isCompanionMode = true
-                                    scope.launch {
-                                        syncClient.sendCommandToPhone(
-                                            PlaybackCommand(
-                                                action = PlaybackCommand.Action.PLAY_TRACK,
-                                                songId = phoneTrack.id
+                                onToggleCompanionMode = { isCompanionMode = !isCompanionMode },
+                                onPlayTrack = { track ->
+                                    if (isCompanionMode) {
+                                        scope.launch {
+                                            syncClient.sendCommandToPhone(
+                                                PlaybackCommand(
+                                                    action = PlaybackCommand.Action.PLAY_TRACK,
+                                                    songId = track.id
+                                                )
                                             )
-                                        )
+                                        }
+                                    } else {
+                                        scope.launch {
+                                            if (phoneState.isPlaying) {
+                                                syncClient.sendCommandToPhone(PlaybackCommand(action = PlaybackCommand.Action.PAUSE))
+                                            }
+                                            playTrackOnWatch(track)
+                                        }
                                     }
                                     currentScreen = WearScreen.NOW_PLAYING
                                 },
-                                onPlayPlaylist = { playlistId ->
-                                    isCompanionMode = true
-                                    scope.launch {
-                                        syncClient.playPlaylistOnPhone(playlistId)
+                                onPlayPlaylist = { playlistId, tracks ->
+                                    if (isCompanionMode) {
+                                        scope.launch {
+                                            syncClient.playPlaylistOnPhone(playlistId)
+                                        }
+                                    } else {
+                                        scope.launch {
+                                            if (phoneState.isPlaying) {
+                                                syncClient.sendCommandToPhone(PlaybackCommand(action = PlaybackCommand.Action.PAUSE))
+                                            }
+                                            val list = tracks.ifEmpty {
+                                                WearDataLayerListenerService.playlistTracks.value[playlistId] ?: emptyList()
+                                            }
+                                            if (list.isNotEmpty()) {
+                                                playTrackOnWatch(list.first())
+                                            }
+                                        }
                                     }
                                     currentScreen = WearScreen.NOW_PLAYING
                                 },
                                 onPlayRadio = { radioId ->
-                                    isCompanionMode = true
-                                    scope.launch {
-                                        syncClient.playRadioOnPhone(radioId)
+                                    if (isCompanionMode) {
+                                        scope.launch {
+                                            syncClient.playRadioOnPhone(radioId)
+                                        }
+                                    } else {
+                                        scope.launch {
+                                            if (phoneState.isPlaying) {
+                                                syncClient.sendCommandToPhone(PlaybackCommand(action = PlaybackCommand.Action.PAUSE))
+                                            }
+                                            val quick = WearDataLayerListenerService.quickMixTracks.value
+                                            if (quick.isNotEmpty()) {
+                                                playTrackOnWatch(quick.first())
+                                            }
+                                        }
                                     }
                                     currentScreen = WearScreen.NOW_PLAYING
                                 },
@@ -206,6 +225,34 @@ class MainActivity : ComponentActivity() {
             syncClient.loadLocalCachedDataItems()
             syncClient.requestPlaybackStateFromPhone()
             syncClient.requestPlaylistsFromPhone()
+        }
+    }
+
+    private suspend fun playTrackOnWatch(track: com.lastwave.core.sync.WearTrackItem) {
+        var playableUrl = track.streamUrl
+        if (playableUrl.isNullOrBlank() || !playableUrl.startsWith("http")) {
+            val response = syncClient.requestStreamResolveFromPhone(
+                songId = track.id,
+                title = track.title,
+                artist = track.artist
+            )
+            playableUrl = response?.streamUrl
+        }
+
+        if (!playableUrl.isNullOrBlank()) {
+            val mediaItem = MediaItem.Builder()
+                .setMediaId(track.id)
+                .setUri(playableUrl)
+                .setMediaMetadata(
+                    MediaMetadata.Builder()
+                        .setTitle(track.title)
+                        .setArtist(track.artist)
+                        .setAlbumTitle(track.album)
+                        .setArtworkUri(track.artworkUrl?.let { Uri.parse(it) })
+                        .build()
+                )
+                .build()
+            WearPlaybackService.playTrack(mediaItem)
         }
     }
 }

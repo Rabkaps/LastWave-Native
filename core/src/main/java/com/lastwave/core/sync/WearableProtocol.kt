@@ -21,6 +21,8 @@ object WearableProtocol {
     const val PATH_PING_ACK = "/lastwave/system/ping_ack"
     const val PATH_CACHE_STATS = "/lastwave/storage/cache_stats"
     const val PATH_CACHE_SETTINGS = "/lastwave/storage/set_cap"
+    const val PATH_STREAM_RESOLVE_REQUEST = "/lastwave/playback/resolve_stream_req"
+    const val PATH_STREAM_RESOLVE_RESPONSE = "/lastwave/playback/resolve_stream_resp"
 
     // DataClient Item paths
     const val PATH_PLAYBACK_STATE = "/lastwave/data/playback_state"
@@ -192,4 +194,27 @@ data class WearPlaylistTracksResponse(
     val playlistTitle: String,
     val tracks: List<WearTrackItem> = emptyList(),
     val timestamp: Long = System.currentTimeMillis()
+)
+
+/**
+ * Request sent by watch to phone to resolve a playable HTTP/HTTPS stream URL.
+ */
+@Serializable
+data class WearStreamResolveRequest(
+    val songId: String,
+    val title: String = "",
+    val artist: String = "",
+    val preferLossless: Boolean = false
+)
+
+/**
+ * Response from phone carrying the resolved live stream URL for standalone watch playback.
+ */
+@Serializable
+data class WearStreamResolveResponse(
+    val songId: String,
+    val streamUrl: String? = null,
+    val mimeType: String? = null,
+    val isLossless: Boolean = false,
+    val error: String? = null
 )

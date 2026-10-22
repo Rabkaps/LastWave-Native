@@ -8,6 +8,8 @@ import com.google.android.gms.wearable.Node
 import com.google.android.gms.wearable.Wearable
 import com.lastwave.core.sync.PlaybackCommand
 import com.lastwave.core.sync.WearPlaylistTracksRequest
+import com.lastwave.core.sync.WearStreamResolveRequest
+import com.lastwave.core.sync.WearStreamResolveResponse
 import com.lastwave.core.sync.WearableProtocol
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -223,6 +225,51 @@ class WearSyncClient(
     /**
      * Requests auth credentials from paired phone
      */
+    /**
+     * Sends request to phone to resolve a playable HTTP/HTTPS stream URL for [songId].
+     */
+    suspend fun requestStreamResolveFromPhone(
+        songId: String,
+        title: String = "",
+        artist: String = "",
+        timeoutMs: Long = 8000L
+    ): WearStreamResolveResponse? = withContext(Dispatchers.IO) {
+        try {
+            val nodes = getConnectedPhoneNodes()
+            if (nodes.isEmpty()) {
+                Log.w(TAG, "No phone node connected to resolve stream for $songId")
+                return@withContext null
+            }
+
+            val req = WearStreamResolveRequest(songId = songId, title = title, artist = artist)
+            val payload = json.encodeToString(req).toByteArray(Charsets.UTF_8)
+            val deferred = kotlinx.coroutines.CompletableDeferred<WearStreamResolveResponse>()
+            pendingStreamResolutions[songId] = deferred
+
+            for (node in nodes) {
+                Tasks.await(messageClient.sendMessage(node.id, WearableProtocol.PATH_STREAM_RESOLVE_REQUEST, payload))
+            }
+
+            kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+                deferred.await()
+            }.also {
+                pendingStreamResolutions.remove(songId)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "requestStreamResolveFromPhone failed for $songId: ${e.message}")
+            pendingStreamResolutions.remove(songId)
+            null
+        }
+    }
+
+    companion object {
+        val pendingStreamResolutions = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.CompletableDeferred<WearStreamResolveResponse>>()
+
+        fun onStreamResolveResponseReceived(response: WearStreamResolveResponse) {
+            pendingStreamResolutions[response.songId]?.complete(response)
+        }
+    }
+
     suspend fun requestAuthFromPhone(): Boolean = withContext(Dispatchers.IO) {
         try {
             val nodes = getConnectedPhoneNodes()

@@ -19,6 +19,7 @@ import com.lastwave.core.sync.WearPlaylistItem
 import com.lastwave.core.sync.WearPlaylistTracksResponse
 import com.lastwave.core.sync.WearPlaylistsPayload
 import com.lastwave.core.sync.WearQuickMixPayload
+import com.lastwave.core.sync.WearStreamResolveResponse
 import com.lastwave.core.sync.WearTrackItem
 import com.lastwave.core.sync.WearableProtocol
 import com.lastwave.wear.WearApp
@@ -178,6 +179,17 @@ class WearDataLayerListenerService : WearableListenerService() {
                         _quickMixTracks.value = payload.tracks
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed decoding quick mix payload: ${e.message}")
+                    }
+                }
+            }
+            WearableProtocol.PATH_STREAM_RESOLVE_RESPONSE -> {
+                val jsonStr = messageEvent.data.toString(Charsets.UTF_8)
+                if (jsonStr.isNotBlank()) {
+                    try {
+                        val response = json.decodeFromString<WearStreamResolveResponse>(jsonStr)
+                        WearSyncClient.onStreamResolveResponseReceived(response)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed decoding stream resolve response: ${e.message}")
                     }
                 }
             }

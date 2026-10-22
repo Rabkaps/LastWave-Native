@@ -59,6 +59,28 @@ class WearPlaybackService : MediaSessionService() {
             }
         }
 
+        fun playTracks(mediaItems: List<MediaItem>, startIndex: Int = 0) {
+            currentServiceInstance?.player?.let { p ->
+                if (mediaItems.isNotEmpty()) {
+                    p.setMediaItems(mediaItems, startIndex.coerceIn(0, mediaItems.lastIndex), 0L)
+                    p.prepare()
+                    p.play()
+                }
+            }
+        }
+
+        fun resume() {
+            currentServiceInstance?.player?.play()
+        }
+
+        fun pause() {
+            currentServiceInstance?.player?.pause()
+        }
+
+        fun seekTo(positionMs: Long) {
+            currentServiceInstance?.player?.seekTo(positionMs.coerceAtLeast(0L))
+        }
+
         fun togglePlayPause() {
             currentServiceInstance?.player?.let { p ->
                 if (p.isPlaying) p.pause() else p.play()
