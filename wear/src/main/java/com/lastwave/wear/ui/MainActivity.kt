@@ -230,19 +230,24 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun playTrackOnWatch(track: com.lastwave.core.sync.WearTrackItem) {
         try {
-            var playableUrl = track.streamUrl
+            var playableUrl = track.streamUrl?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
             var mimeType: String? = null
-            if (playableUrl.isNullOrBlank() || !playableUrl.startsWith("http")) {
+            if (playableUrl.isNullOrBlank()) {
                 val response = syncClient.requestStreamResolveFromPhone(
                     songId = track.id,
                     title = track.title,
                     artist = track.artist
                 )
-                playableUrl = response?.streamUrl
+                playableUrl = response?.streamUrl?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
                 mimeType = response?.mimeType
             }
 
             if (!playableUrl.isNullOrBlank()) {
+                // Pause phone playback if it's currently active so they don't fight
+                syncClient.sendCommandToPhone(
+                    com.lastwave.core.sync.PlaybackCommand(com.lastwave.core.sync.PlaybackCommand.Action.PAUSE)
+                )
+
                 val mediaItemBuilder = MediaItem.Builder()
                     .setMediaId(track.id)
                     .setUri(playableUrl)
@@ -258,6 +263,8 @@ class MainActivity : ComponentActivity() {
                     mediaItemBuilder.setMimeType(mimeType)
                 }
                 WearPlaybackService.playTrack(mediaItemBuilder.build())
+            } else {
+                android.util.Log.w("MainActivity", "No stream URL resolvable for ${track.title}")
             }
         } catch (e: Exception) {
             android.util.Log.e("MainActivity", "Error playing track on watch: ${e.message}", e)

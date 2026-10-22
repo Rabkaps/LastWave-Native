@@ -309,6 +309,14 @@ class MusicPlayer @Inject constructor(
             ResolvedStream(url, mime, null, null, url)
         } ?: resolveTrackAudioStreamWithRetry(track, track.videoId, allowLossless = true)
 
+    internal suspend fun resolveWatchStream(track: PlayableTrack, videoId: String?): ResolvedStream =
+        resolveTrackAudioStreamWithRetry(
+            track = track,
+            videoId = videoId,
+            allowLossless = true,
+            allowLocalDownloads = false
+        )
+
     internal fun castBuffering(playing: Boolean) {
         _state.update { it.copy(isPlaying = playing, isBuffering = true, error = null) }
     }
@@ -7423,13 +7431,20 @@ class MusicPlayer @Inject constructor(
         videoId: String?,
         allowLossless: Boolean,
         losslessBudget: LosslessBudget = LosslessBudget.Interactive,
+        allowLocalDownloads: Boolean = true,
     ): ResolvedStream {
         runCatching { streamResolutionWakeLock?.acquire(60_000L) }
         try {
             var lastFailure: Throwable? = null
             repeat(2) { attempt ->
                 try {
-                    return resolveTrackAudioStream(track, videoId, allowLossless, losslessBudget = losslessBudget)
+                    return resolveTrackAudioStream(
+                        track = track,
+                        videoId = videoId,
+                        allowLossless = allowLossless,
+                        allowLocalDownloads = allowLocalDownloads,
+                        losslessBudget = losslessBudget,
+                    )
                 } catch (error: Throwable) {
                     if (error is CancellationException &&
                         error !is kotlinx.coroutines.TimeoutCancellationException

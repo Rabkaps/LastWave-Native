@@ -325,12 +325,15 @@ class PhoneWearableBridge @Inject constructor(
         artist: String = ""
     ): WearStreamResolveResponse = withContext(Dispatchers.IO) {
         try {
+            val directVideoId = songId.takeIf {
+                it.isNotBlank() && !it.contains("/") && !it.contains(":") && !it.contains("_")
+            }
             val playable = PlayableTrack(
                 title = title.ifBlank { "Track" },
                 artist = artist.ifBlank { "Artist" },
-                videoId = songId
+                videoId = directVideoId
             )
-            val resolved = musicPlayer.resolveCastStream(playable)
+            val resolved = musicPlayer.resolveWatchStream(playable, directVideoId)
             WearStreamResolveResponse(
                 songId = songId,
                 streamUrl = resolved.url,
@@ -338,6 +341,7 @@ class PhoneWearableBridge @Inject constructor(
                 isLossless = resolved.isLossless
             )
         } catch (e: Exception) {
+            Log.e(TAG, "Failed to resolve stream for watch: ${e.message}", e)
             WearStreamResolveResponse(
                 songId = songId,
                 error = e.message ?: "Failed to resolve stream"
@@ -463,7 +467,8 @@ fun DownloadedTrackEntity.toWearTrackItem(): WearTrackItem {
         album = album,
         artworkUrl = artworkUrl,
         durationMs = durationMs,
-        streamUrl = filePath,
+        streamUrl = null,
+        filePath = null,
         isLossless = true,
         qualityBadge = "Downloaded FLAC"
     )
