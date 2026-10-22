@@ -341,7 +341,7 @@ class PhoneWearableBridge @Inject constructor(
                 isLossless = resolved.isLossless
             )
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to resolve stream for watch: ${e.message}", e)
+            android.util.Log.e("PhoneWearableBridge", "Failed to resolve stream for watch: ${e.message}", e)
             WearStreamResolveResponse(
                 songId = songId,
                 error = e.message ?: "Failed to resolve stream"
@@ -468,7 +468,6 @@ fun DownloadedTrackEntity.toWearTrackItem(): WearTrackItem {
         artworkUrl = artworkUrl,
         durationMs = durationMs,
         streamUrl = null,
-        filePath = null,
         isLossless = true,
         qualityBadge = "Downloaded FLAC"
     )
