@@ -28,6 +28,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -51,12 +54,29 @@ class WearPlaybackService : MediaSessionService() {
         @Volatile
         var currentServiceInstance: WearPlaybackService? = null
 
-        fun playTrack(mediaItem: MediaItem) {
-            currentServiceInstance?.player?.let { p ->
+        fun playTrack(context: Context? = null, mediaItem: MediaItem) {
+            val p = currentServiceInstance?.player
+            if (p != null) {
                 p.setMediaItem(mediaItem)
                 p.prepare()
                 p.play()
+            } else if (context != null) {
+                val intent = Intent(context, WearPlaybackService::class.java)
+                context.bindService(intent, object : android.content.ServiceConnection {
+                    override fun onServiceConnected(name: android.content.ComponentName?, service: android.os.IBinder?) {
+                        currentServiceInstance?.player?.let { player ->
+                            player.setMediaItem(mediaItem)
+                            player.prepare()
+                            player.play()
+                        }
+                    }
+                    override fun onServiceDisconnected(name: android.content.ComponentName?) {}
+                }, Context.BIND_AUTO_CREATE)
             }
+        }
+
+        fun playTrack(mediaItem: MediaItem) {
+            playTrack(null, mediaItem)
         }
 
         fun playTracks(mediaItems: List<MediaItem>, startIndex: Int = 0) {
@@ -145,6 +165,17 @@ class WearPlaybackService : MediaSessionService() {
 
         player = exo
         currentServiceInstance = this
+
+        // Periodically update position during playback for smooth UI progress
+        serviceScope.launch {
+            while (isActive) {
+                val p = player
+                if (p != null && p.isPlaying) {
+                    updateStateFromPlayer()
+                }
+                delay(1000L)
+            }
+        }
 
         mediaSession = MediaSession.Builder(this, exo)
             .setSessionActivity(

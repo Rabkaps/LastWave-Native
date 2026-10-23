@@ -50,11 +50,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Ensure WearPlaybackService is running for local playback
-        try {
-            val serviceIntent = Intent(this, WearPlaybackService::class.java)
-            startService(serviceIntent)
-        } catch (_: Exception) {}
+        // Bind WearPlaybackService so local player is always initialized
+        bindPlaybackService()
 
         setContent {
             LastWaveWearTheme {
@@ -219,6 +216,40 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private var isServiceBound = false
+    private val serviceConnection = object : android.content.ServiceConnection {
+        override fun onServiceConnected(name: android.content.ComponentName?, service: android.os.IBinder?) {
+            isServiceBound = true
+        }
+        override fun onServiceDisconnected(name: android.content.ComponentName?) {
+            isServiceBound = false
+        }
+    }
+
+    private fun bindPlaybackService() {
+        try {
+            val serviceIntent = Intent(this, WearPlaybackService::class.java)
+            bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE)
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Failed to bind WearPlaybackService: ${e.message}")
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        bindPlaybackService()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (isServiceBound) {
+            try {
+                unbindService(serviceConnection)
+            } catch (_: Exception) {}
+            isServiceBound = false
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         lifecycleScope.launch {
@@ -263,7 +294,7 @@ class MainActivity : ComponentActivity() {
                 if (!mimeType.isNullOrBlank()) {
                     mediaItemBuilder.setMimeType(mimeType)
                 }
-                WearPlaybackService.playTrack(mediaItemBuilder.build())
+                WearPlaybackService.playTrack(this@MainActivity, mediaItemBuilder.build())
             } else {
                 android.util.Log.w("MainActivity", "No stream URL resolvable for ${track.title}")
             }
