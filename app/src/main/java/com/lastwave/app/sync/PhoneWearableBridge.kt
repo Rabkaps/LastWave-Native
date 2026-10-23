@@ -334,6 +334,7 @@ class PhoneWearableBridge @Inject constructor(
                 videoId = directVideoId
             )
             val resolved = musicPlayer.resolveWatchStream(playable, directVideoId)
+            android.util.Log.i("PhoneWearableBridge", "resolveStreamForWatch success for '$title' ($songId): ${resolved.url}")
             WearStreamResolveResponse(
                 songId = songId,
                 streamUrl = resolved.url,

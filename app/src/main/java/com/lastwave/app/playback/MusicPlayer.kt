@@ -309,13 +309,39 @@ class MusicPlayer @Inject constructor(
             ResolvedStream(url, mime, null, null, url)
         } ?: resolveTrackAudioStreamWithRetry(track, track.videoId, allowLossless = true)
 
-    internal suspend fun resolveWatchStream(track: PlayableTrack, videoId: String?): ResolvedStream =
+    internal suspend fun resolveWatchStream(track: PlayableTrack, videoId: String?): ResolvedStream = withContext(Dispatchers.IO) {
+        val directVid = videoId?.takeIf { it.isNotBlank() && !it.contains("/") && !it.contains(":") && !it.contains("_") }
+            ?: track.videoId?.takeIf { it.isNotBlank() && !it.contains("/") && !it.contains(":") && !it.contains("_") }
+
+        val targetVid = directVid ?: runCatching {
+            innerTube.findBestMatch(
+                title = track.title,
+                artist = track.artist,
+                prefetchStreams = false
+            ).videoId.takeIf { it.isNotBlank() }
+        }.getOrNull()
+
+        if (targetVid != null) {
+            val audioStream = innerTube.resolveAudioStream(targetVid)
+            return@withContext ResolvedStream(
+                url = audioStream.url,
+                mimeType = audioStream.mimeType ?: "audio/webm",
+                bitrateKbps = audioStream.bitrate / 1000,
+                audioCodec = audioStream.codec,
+                cacheKey = targetVid,
+                requestHeaders = audioStream.requestHeaders,
+                isLossless = false,
+                youtubeCandidate = audioStream
+            )
+        }
+
         resolveTrackAudioStreamWithRetry(
             track = track,
             videoId = videoId,
             allowLossless = true,
             allowLocalDownloads = false
         )
+    }
 
     internal fun castBuffering(playing: Boolean) {
         _state.update { it.copy(isPlaying = playing, isBuffering = true, error = null) }

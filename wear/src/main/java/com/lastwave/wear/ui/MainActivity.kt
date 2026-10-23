@@ -238,6 +238,7 @@ class MainActivity : ComponentActivity() {
                     title = track.title,
                     artist = track.artist
                 )
+                android.util.Log.i("MainActivity", "Stream resolve response for '${track.title}': streamUrl='${response?.streamUrl}', error='${response?.error}'")
                 playableUrl = response?.streamUrl?.takeIf { it.startsWith("http://") || it.startsWith("https://") }
                 mimeType = response?.mimeType
             }

@@ -187,6 +187,7 @@ class WearDataLayerListenerService : WearableListenerService() {
                 if (jsonStr.isNotBlank()) {
                     try {
                         val response = json.decodeFromString<WearStreamResolveResponse>(jsonStr)
+                        Log.i(TAG, "PATH_STREAM_RESOLVE_RESPONSE received for ${response.songId}: url=${response.streamUrl}, error=${response.error}")
                         WearSyncClient.onStreamResolveResponseReceived(response)
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed decoding stream resolve response: ${e.message}")
