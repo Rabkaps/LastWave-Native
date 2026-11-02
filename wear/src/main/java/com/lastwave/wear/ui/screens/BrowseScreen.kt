@@ -30,30 +30,29 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.wear.compose.material3.Card
+import androidx.wear.compose.material3.CardDefaults
 import androidx.wear.compose.material3.CircularProgressIndicator
+import androidx.wear.compose.material3.FilledTonalButton
+import androidx.wear.compose.material3.FilledTonalIconButton
+import androidx.wear.compose.material3.Icon
+import androidx.wear.compose.material3.IconButtonDefaults
+import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
 import coil.compose.AsyncImage
 import com.lastwave.core.sync.WearPlaylistItem
 import com.lastwave.core.sync.WearTrackItem
+import com.lastwave.wear.R
 import com.lastwave.wear.WearApp
 import com.lastwave.wear.sync.WearDataLayerListenerService
 import com.lastwave.wear.ui.rotary.withRotaryHaptics
 import kotlinx.coroutines.launch
-
-data class WatchSongItem(
-    val id: String,
-    val title: String,
-    val artist: String,
-    val streamUrl: String,
-    val artworkUrl: String? = null,
-    val isLossless: Boolean = false,
-    val qualityBadge: String = "LOSSLESS FLAC"
-)
 
 @Composable
 fun BrowseScreen(
@@ -82,9 +81,6 @@ fun BrowseScreen(
         }
     }
 
-    // Watch uses real synced playlists and continuous radios from LastWave
-    val localLosslessTracks = remember { emptyList<WatchSongItem>() }
-
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -100,37 +96,50 @@ fun BrowseScreen(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 12.dp, vertical = 14.dp),
+                    .padding(horizontal = 10.dp, vertical = 10.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 item {
+                    // Header with back icon and companion toggle
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 8.dp, bottom = 4.dp),
+                            .padding(top = 4.dp, bottom = 2.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "← Playlists",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFFC6F100),
-                            modifier = Modifier.clickable { activePlaylistDetail = null }
-                        )
+                        FilledTonalIconButton(
+                            onClick = { activePlaylistDetail = null },
+                            modifier = Modifier.size(28.dp),
+                            colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                contentColor = MaterialTheme.colorScheme.primary
+                            )
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_arrow_back),
+                                contentDescription = "Back",
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(12.dp))
-                                .background(if (isCompanionMode) Color(0xFF2E3A1C) else Color(0xFF1E2838))
+                                .background(
+                                    if (isCompanionMode) MaterialTheme.colorScheme.secondaryContainer
+                                    else MaterialTheme.colorScheme.primaryContainer
+                                )
                                 .clickable { onToggleCompanionMode() }
                                 .padding(horizontal = 7.dp, vertical = 3.dp)
                         ) {
                             Text(
-                                text = if (isCompanionMode) "📱 PHONE" else "⌚ WATCH",
-                                fontSize = 9.sp,
+                                text = if (isCompanionMode) "PHONE" else "WATCH",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
                                 fontWeight = FontWeight.Bold,
-                                color = if (isCompanionMode) Color(0xFFC6F100) else Color(0xFF82B1FF)
+                                color = if (isCompanionMode) MaterialTheme.colorScheme.onSecondaryContainer
+                                else MaterialTheme.colorScheme.onPrimaryContainer
                             )
                         }
                     }
@@ -140,34 +149,39 @@ fun BrowseScreen(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 4.dp),
+                            .padding(vertical = 2.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
                         Text(
                             text = activePlaylist.title,
-                            fontSize = 13.sp,
+                            style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White,
+                            color = MaterialTheme.colorScheme.onSurface,
                             textAlign = TextAlign.Center,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Color(0xFFC6F100))
-                                .clickable {
-                                    onPlayPlaylist(activePlaylist.id, tracks)
-                                }
-                                .padding(horizontal = 14.dp, vertical = 6.dp)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        FilledTonalButton(
+                            onClick = { onPlayPlaylist(activePlaylist.id, tracks) },
+                            modifier = Modifier.height(30.dp)
                         ) {
-                            Text(
-                                text = "▶ Play All",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.Black
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_play),
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Text(
+                                    text = "Play All",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
                     }
                 }
@@ -180,73 +194,86 @@ fun BrowseScreen(
                                 .padding(vertical = 16.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp)
+                            )
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
                                 text = "Loading tracks from phone...",
-                                fontSize = 10.sp,
-                                color = Color.Gray
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
                 } else {
                     items(tracks) { track ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Color(0xFF161616))
-                                .clickable { onPlayTrack(track) }
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        Card(
+                            onClick = { onPlayTrack(track) },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                            )
                         ) {
-                            Box(
+                            Row(
                                 modifier = Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFF282828)),
-                                contentAlignment = Alignment.Center
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                if (!track.artworkUrl.isNullOrBlank()) {
-                                    AsyncImage(
-                                        model = track.artworkUrl,
-                                        contentDescription = track.title,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                } else {
-                                    Text(text = "🎵", fontSize = 14.sp)
+                                Box(
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.surfaceContainerLow),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (!track.artworkUrl.isNullOrBlank()) {
+                                        AsyncImage(
+                                            model = track.artworkUrl,
+                                            contentDescription = track.title,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    } else {
+                                        Icon(
+                                            painter = painterResource(R.drawable.ic_tile_music),
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
                                 }
-                            }
 
-                            Spacer(modifier = Modifier.size(8.dp))
+                                Spacer(modifier = Modifier.size(8.dp))
 
-                            Column(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                Text(
-                                    text = track.title,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = track.artist.ifBlank { "Track" },
-                                    fontSize = 9.sp,
-                                    color = Color.LightGray,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Text(
+                                        text = track.title,
+                                        style = MaterialTheme.typography.titleSmall.copy(fontSize = 11.sp),
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = track.artist.ifBlank { "Track" },
+                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 9.sp),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                         }
                     }
                 }
 
                 item {
-                    Spacer(modifier = Modifier.height(20.dp))
+                    Spacer(modifier = Modifier.height(18.dp))
                 }
             }
         } else {
@@ -254,38 +281,50 @@ fun BrowseScreen(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 12.dp, vertical = 14.dp),
+                    .padding(horizontal = 10.dp, vertical = 10.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 // Header / Back
                 item {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 8.dp, bottom = 4.dp),
+                            .padding(top = 4.dp, bottom = 2.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "← Back",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFFC6F100),
-                            modifier = Modifier.clickable { onBack() }
-                        )
+                        FilledTonalIconButton(
+                            onClick = onBack,
+                            modifier = Modifier.size(28.dp),
+                            colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                contentColor = MaterialTheme.colorScheme.primary
+                            )
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_arrow_back),
+                                contentDescription = "Back to Player",
+                                modifier = Modifier.size(14.dp)
+                            )
+                        }
+
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(12.dp))
-                                .background(if (isCompanionMode) Color(0xFF2E3A1C) else Color(0xFF1E2838))
+                                .background(
+                                    if (isCompanionMode) MaterialTheme.colorScheme.secondaryContainer
+                                    else MaterialTheme.colorScheme.primaryContainer
+                                )
                                 .clickable { onToggleCompanionMode() }
                                 .padding(horizontal = 7.dp, vertical = 3.dp)
                         ) {
                             Text(
-                                text = if (isCompanionMode) "📱 PHONE" else "⌚ WATCH",
-                                fontSize = 9.sp,
+                                text = if (isCompanionMode) "PHONE" else "WATCH",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
                                 fontWeight = FontWeight.Bold,
-                                color = if (isCompanionMode) Color(0xFFC6F100) else Color(0xFF82B1FF)
+                                color = if (isCompanionMode) MaterialTheme.colorScheme.onSecondaryContainer
+                                else MaterialTheme.colorScheme.onPrimaryContainer
                             )
                         }
                     }
@@ -296,7 +335,7 @@ fun BrowseScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 4.dp),
+                            .padding(vertical = 2.dp),
                         horizontalArrangement = Arrangement.Center
                     ) {
                         listOf("Playlists", "Radios", "Queue").forEach { cat ->
@@ -305,7 +344,10 @@ fun BrowseScreen(
                                 modifier = Modifier
                                     .padding(horizontal = 2.dp)
                                     .clip(RoundedCornerShape(12.dp))
-                                    .background(if (isSelected) Color(0xFFC6F100) else Color(0xFF1E1E1E))
+                                    .background(
+                                        if (isSelected) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.surfaceContainerHigh
+                                    )
                                     .clickable {
                                         selectedCategory = cat
                                         if (cat == "Playlists" || cat == "Radios") {
@@ -318,13 +360,14 @@ fun BrowseScreen(
                                             }
                                         }
                                     }
-                                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                                    .padding(horizontal = 7.dp, vertical = 4.dp)
                             ) {
                                 Text(
                                     text = cat,
-                                    fontSize = 9.sp,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
                                     fontWeight = FontWeight.Bold,
-                                    color = if (isSelected) Color.Black else Color.LightGray
+                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
@@ -344,108 +387,115 @@ fun BrowseScreen(
                                 ) {
                                     Text(
                                         text = "No Playlists Synced",
-                                        fontSize = 11.sp,
+                                        style = MaterialTheme.typography.titleSmall,
                                         fontWeight = FontWeight.Bold,
-                                        color = Color.White
+                                        color = MaterialTheme.colorScheme.onSurface
                                     )
                                     Spacer(modifier = Modifier.height(4.dp))
                                     Text(
-                                        text = "Open Phone App → Settings → Wear OS → Synced Playlists & Radios to pick playlists for your watch.",
-                                        fontSize = 9.sp,
-                                        color = Color.Gray,
+                                        text = "Open Phone App → Settings → Wear OS → Synced Playlists to pick playlists for your watch.",
+                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 9.sp),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         textAlign = TextAlign.Center
                                     )
                                     Spacer(modifier = Modifier.height(8.dp))
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(Color(0xFF2E3A1C))
-                                            .clickable {
-                                                scope.launch {
-                                                    WearApp.instance.syncClient.requestPlaylistsFromPhone()
-                                                }
+                                    FilledTonalButton(
+                                        onClick = {
+                                            scope.launch {
+                                                WearApp.instance.syncClient.requestPlaylistsFromPhone()
                                             }
-                                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                                        },
+                                        modifier = Modifier.height(30.dp)
                                     ) {
                                         Text(
-                                            text = "🔄 Sync Playlists",
-                                            fontSize = 9.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color(0xFFC6F100)
+                                            text = "Sync Playlists",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold
                                         )
                                     }
                                 }
                             }
                         } else {
                             items(playlists) { pl ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(Color(0xFF161616))
-                                        .clickable {
-                                            activePlaylistDetail = pl
-                                            scope.launch {
-                                                WearApp.instance.syncClient.requestPlaylistTracksFromPhone(pl.id)
+                                Card(
+                                    onClick = {
+                                        activePlaylistDetail = pl
+                                        scope.launch {
+                                            WearApp.instance.syncClient.requestPlaylistTracksFromPhone(pl.id)
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                    )
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(34.dp)
+                                                .clip(CircleShape)
+                                                .background(MaterialTheme.colorScheme.surfaceContainerLow),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (!pl.artworkUrl.isNullOrBlank()) {
+                                                AsyncImage(
+                                                    model = pl.artworkUrl,
+                                                    contentDescription = pl.title,
+                                                    contentScale = ContentScale.Crop,
+                                                    modifier = Modifier.fillMaxSize()
+                                                )
+                                            } else {
+                                                Icon(
+                                                    painter = painterResource(R.drawable.ic_tile_music),
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
                                             }
                                         }
-                                        .padding(horizontal = 8.dp, vertical = 7.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(38.dp)
-                                            .clip(CircleShape)
-                                            .background(Color(0xFF282828)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        if (!pl.artworkUrl.isNullOrBlank()) {
-                                            AsyncImage(
-                                                model = pl.artworkUrl,
-                                                contentDescription = pl.title,
-                                                contentScale = ContentScale.Crop,
-                                                modifier = Modifier.fillMaxSize()
+
+                                        Spacer(modifier = Modifier.size(8.dp))
+
+                                        Column(
+                                            modifier = Modifier.weight(1f),
+                                            verticalArrangement = Arrangement.Center
+                                        ) {
+                                            Text(
+                                                text = pl.title,
+                                                style = MaterialTheme.typography.titleSmall.copy(fontSize = 11.sp),
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
                                             )
-                                        } else {
-                                            Text(text = "🎵", fontSize = 16.sp)
+                                            Text(
+                                                text = pl.subtitle.ifBlank { "${pl.trackCount} tracks" },
+                                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 9.sp),
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
                                         }
-                                    }
 
-                                    Spacer(modifier = Modifier.size(8.dp))
-
-                                    Column(
-                                        modifier = Modifier.weight(1f),
-                                        verticalArrangement = Arrangement.Center
-                                    ) {
-                                        Text(
-                                            text = pl.title,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = pl.subtitle.ifBlank { "${pl.trackCount} tracks" },
-                                            fontSize = 9.sp,
-                                            color = Color.LightGray,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(Color(0xFF262626))
-                                            .padding(horizontal = 5.dp, vertical = 2.dp)
-                                    ) {
-                                        Text(
-                                            text = pl.source.uppercase(),
-                                            fontSize = 8.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color(0xFFC6F100)
-                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                                        ) {
+                                            Text(
+                                                text = pl.source.uppercase(),
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 7.5.sp),
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -464,75 +514,86 @@ fun BrowseScreen(
                                 ) {
                                     Text(
                                         text = "No Radios Synced",
-                                        fontSize = 11.sp,
+                                        style = MaterialTheme.typography.titleSmall,
                                         fontWeight = FontWeight.Bold,
-                                        color = Color.White
+                                        color = MaterialTheme.colorScheme.onSurface
                                     )
                                     Spacer(modifier = Modifier.height(4.dp))
                                     Text(
-                                        text = "Open Phone App → Settings → Wear OS to pick radios.",
-                                        fontSize = 9.sp,
-                                        color = Color.Gray,
+                                        text = "Open Phone App → Settings → Wear OS to pick continuous radios.",
+                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 9.sp),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         textAlign = TextAlign.Center
                                     )
                                 }
                             }
                         } else {
                             items(radios) { radio ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(Color(0xFF161616))
-                                        .clickable { onPlayRadio(radio.id) }
-                                        .padding(horizontal = 8.dp, vertical = 7.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                Card(
+                                    onClick = { onPlayRadio(radio.id) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                    )
                                 ) {
-                                    Box(
+                                    Row(
                                         modifier = Modifier
-                                            .size(38.dp)
-                                            .clip(CircleShape)
-                                            .background(Color(0xFF222B1E)),
-                                        contentAlignment = Alignment.Center
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Text(text = "📻", fontSize = 16.sp)
-                                    }
+                                        Box(
+                                            modifier = Modifier
+                                                .size(34.dp)
+                                                .clip(CircleShape)
+                                                .background(MaterialTheme.colorScheme.primaryContainer),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Icon(
+                                                painter = painterResource(R.drawable.ic_radio),
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
 
-                                    Spacer(modifier = Modifier.size(8.dp))
+                                        Spacer(modifier = Modifier.size(8.dp))
 
-                                    Column(
-                                        modifier = Modifier.weight(1f),
-                                        verticalArrangement = Arrangement.Center
-                                    ) {
-                                        Text(
-                                            text = radio.title,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = radio.subtitle,
-                                            fontSize = 9.sp,
-                                            color = Color.LightGray,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
+                                        Column(
+                                            modifier = Modifier.weight(1f),
+                                            verticalArrangement = Arrangement.Center
+                                        ) {
+                                            Text(
+                                                text = radio.title,
+                                                style = MaterialTheme.typography.titleSmall.copy(fontSize = 11.sp),
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = radio.subtitle,
+                                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 9.sp),
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
 
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(Color(0xFF2E3A1C))
-                                            .padding(horizontal = 5.dp, vertical = 2.dp)
-                                    ) {
-                                        Text(
-                                            text = "PLAY",
-                                            fontSize = 8.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color(0xFFC6F100)
-                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(6.dp))
+                                                .background(MaterialTheme.colorScheme.primaryContainer)
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        ) {
+                                            Text(
+                                                text = "PLAY",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 7.5.sp),
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -550,104 +611,90 @@ fun BrowseScreen(
                                 ) {
                                     Text(
                                         text = "Phone Queue Empty",
-                                        fontSize = 11.sp,
+                                        style = MaterialTheme.typography.titleSmall,
                                         fontWeight = FontWeight.Bold,
-                                        color = Color.White
+                                        color = MaterialTheme.colorScheme.onSurface
                                     )
                                     Spacer(modifier = Modifier.height(4.dp))
                                     Text(
                                         text = "Play songs on your phone to view the active queue here.",
-                                        fontSize = 9.sp,
-                                        color = Color.Gray,
+                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 9.sp),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         textAlign = TextAlign.Center
                                     )
                                 }
                             }
                         } else {
                             items(phoneTracks) { track ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(Color(0xFF161616))
-                                        .clickable { onPlayTrack(track) }
-                                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                Card(
+                                    onClick = { onPlayTrack(track) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                    )
                                 ) {
-                                    Box(
+                                    Row(
                                         modifier = Modifier
-                                            .size(36.dp)
-                                            .clip(CircleShape)
-                                            .background(Color(0xFF282828)),
-                                        contentAlignment = Alignment.Center
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        if (!track.artworkUrl.isNullOrBlank()) {
-                                            AsyncImage(
-                                                model = track.artworkUrl,
-                                                contentDescription = track.title,
-                                                contentScale = ContentScale.Crop,
-                                                modifier = Modifier.fillMaxSize()
+                                        Box(
+                                            modifier = Modifier
+                                                .size(32.dp)
+                                                .clip(CircleShape)
+                                                .background(MaterialTheme.colorScheme.surfaceContainerLow),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (!track.artworkUrl.isNullOrBlank()) {
+                                                AsyncImage(
+                                                    model = track.artworkUrl,
+                                                    contentDescription = track.title,
+                                                    contentScale = ContentScale.Crop,
+                                                    modifier = Modifier.fillMaxSize()
+                                                )
+                                            } else {
+                                                Icon(
+                                                    painter = painterResource(R.drawable.ic_tile_music),
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.secondary,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.size(8.dp))
+
+                                        Column(
+                                            modifier = Modifier.weight(1f),
+                                            verticalArrangement = Arrangement.Center
+                                        ) {
+                                            Text(
+                                                text = track.title,
+                                                style = MaterialTheme.typography.titleSmall.copy(fontSize = 11.sp),
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
                                             )
-                                        } else {
-                                            Text(text = "📱", fontSize = 14.sp)
+                                            Text(
+                                                text = track.artist.ifBlank { "Phone Player" },
+                                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 9.sp),
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
                                         }
                                     }
-
-                                    Spacer(modifier = Modifier.size(8.dp))
-
-                                    Column(
-                                        modifier = Modifier.weight(1f),
-                                        verticalArrangement = Arrangement.Center
-                                    ) {
-                                        Text(
-                                            text = track.title,
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            text = track.artist.ifBlank { "Phone Player" },
-                                            fontSize = 9.sp,
-                                            color = Color.LightGray,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
                                 }
-                            }
-                        }
-                    }
-
-                    "Offline" -> {
-                        item {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 16.dp, horizontal = 8.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Text(
-                                    text = "Offline Mode",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color.White
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "Play any synced playlist or radio while connected to cache music on watch.",
-                                    fontSize = 9.sp,
-                                    color = Color.Gray,
-                                    textAlign = TextAlign.Center
-                                )
                             }
                         }
                     }
                 }
 
                 item {
-                    Spacer(modifier = Modifier.height(20.dp))
+                    Spacer(modifier = Modifier.height(18.dp))
                 }
             }
         }

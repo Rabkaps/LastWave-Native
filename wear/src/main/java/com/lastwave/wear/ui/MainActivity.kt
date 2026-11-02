@@ -99,6 +99,16 @@ class MainActivity : ComponentActivity() {
                                             PlaybackCommand.Action.PAUSE -> WearPlaybackService.pause()
                                             PlaybackCommand.Action.SKIP_NEXT -> WearPlaybackService.skipNext()
                                             PlaybackCommand.Action.SKIP_PREVIOUS -> WearPlaybackService.skipPrevious()
+                                            PlaybackCommand.Action.TOGGLE_LIKE -> {
+                                                scope.launch {
+                                                    syncClient.sendCommandToPhone(
+                                                        PlaybackCommand(
+                                                            action = PlaybackCommand.Action.TOGGLE_LIKE,
+                                                            songId = activePlaybackState.songId
+                                                        )
+                                                    )
+                                                }
+                                            }
                                             else -> {}
                                         }
                                     }

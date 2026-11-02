@@ -3,7 +3,7 @@ pluginManagement {
         google()
         mavenCentral()
         gradlePluginPortal()
-        maven { url = java.net.URI.create("https://storage.googleapis.com/r8-releases/raw") }
+        maven { url 'https://storage.googleapis.com/r8-releases/raw' }
     }
 }
 dependencyResolutionManagement {
@@ -11,12 +11,12 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        maven { url = java.net.URI.create("https://jitpack.io") }
+        maven { url 'https://jitpack.io' }
     }
 }
 
 rootProject.name = "LastWave"
-include(":app")
-include(":core")
-include(":wear")
-include(":audio:decent-usb-audio-driver")
+include ':app'
+include ':core'
+include ':wear'
+include ':audio:decent-usb-audio-driver'
