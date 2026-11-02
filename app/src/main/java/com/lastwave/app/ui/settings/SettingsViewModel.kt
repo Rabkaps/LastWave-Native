@@ -8,6 +8,7 @@ import com.lastwave.app.data.backup.RestoreResult
 import com.lastwave.app.data.generate.GenerateRepository
 import com.lastwave.app.data.local.AccentMode
 import com.lastwave.app.data.local.ThemeMode
+import com.lastwave.app.data.local.AppIcon
 import com.lastwave.app.data.local.AppLanguage
 import com.lastwave.app.data.local.EqualizerSettings
 import com.lastwave.app.data.local.MiscSettings
@@ -109,6 +110,7 @@ class SettingsViewModel @Inject constructor(
     val appUpdateManager: com.lastwave.app.data.update.AppUpdateManager,
     val phoneWearableBridge: com.lastwave.app.sync.PhoneWearableBridge,
     private val spotifyPreferences: com.lastwave.app.data.spotify.SpotifyPreferences,
+    private val autoMixPreferences: com.lastwave.app.playback.automix.api.AutoMixPreferences,
     @dagger.hilt.android.qualifiers.ApplicationContext private val context: android.content.Context,
 ) : ViewModel() {
 
@@ -196,25 +198,52 @@ class SettingsViewModel @Inject constructor(
         .withSettingsFallback("Spotify canvas preference", true)
         .stateIn(viewModelScope, SettingsSharing, true)
 
-    val spotifySyncLikedSongsEnabled: StateFlow<Boolean> = spotifyPreferences.syncLikedSongsEnabled
-        .withSettingsFallback("Spotify sync liked songs preference", true)
+    val spotifyPreferCanvas: StateFlow<Boolean> = spotifyPreferences.preferSpotifyCanvas
+        .withSettingsFallback("Spotify prefer canvas preference", false)
+        .stateIn(viewModelScope, SettingsSharing, false)
+
+    /** Whether a liked song is added to this app's own Liked Songs playlist. */
+    val likedSongsLocalSync: StateFlow<Boolean> = settingsPreferences.likedSongsLocalSync
+        .withSettingsFallback("Liked songs local sync preference", true)
         .stateIn(viewModelScope, SettingsSharing, true)
+
+    /** Whether a liked song is also marked as liked on YouTube Music. */
+    val likedSongsYouTubeSync: StateFlow<Boolean> = settingsPreferences.likedSongsYouTubeSync
+        .withSettingsFallback("Liked songs YouTube sync preference", true)
+        .stateIn(viewModelScope, SettingsSharing, true)
+
+    fun setLikedSongsLocalSync(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsPreferences.setLikedSongsLocalSync(enabled)
+        }
+    }
+
+    fun setLikedSongsYouTubeSync(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsPreferences.setLikedSongsYouTubeSync(enabled)
+        }
+    }
 
     fun setSpotifyCanvasEnabled(enabled: Boolean) {
         viewModelScope.launch {
             spotifyPreferences.setCanvasEnabled(enabled)
+            settingsPreferences.setCanvasEnabled(enabled)
+            if (enabled) {
+                spotifyPreferences.setPreferSpotifyCanvas(true)
+            }
         }
     }
 
-    fun setSpotifySyncLikedSongsEnabled(enabled: Boolean) {
+    fun setSpotifyPreferCanvas(enabled: Boolean) {
         viewModelScope.launch {
-            spotifyPreferences.setSyncLikedSongsEnabled(enabled)
+            spotifyPreferences.setPreferSpotifyCanvas(enabled)
         }
     }
 
     fun disconnectSpotify() {
         viewModelScope.launch {
             spotifyPreferences.clearConnection()
+            _uiState.update { it.copy(toastMessage = "Spotify account disconnected") }
         }
     }
 
@@ -540,9 +569,12 @@ class SettingsViewModel @Inject constructor(
     // ── Appearance (§8.2 / §8.3 / §8.4) ──
 
     fun setThemeMode(mode: ThemeMode) = launchSettingsAction("update theme mode") { themeRepository.setThemeMode(mode) }
+    fun setLastWaveTheme(enabled: Boolean) = launchSettingsAction("update LastWave signature theme") { themeRepository.setLastWaveTheme(enabled) }
+    fun setAppIcon(icon: AppIcon) = launchSettingsAction("update app icon") { themeRepository.setAppIcon(icon) }
     fun setAmoled(enabled: Boolean) = launchSettingsAction("update AMOLED mode") { themeRepository.setAmoled(enabled) }
     fun setLiquidGlass(enabled: Boolean) = launchSettingsAction("update Liquid Glass") { themeRepository.setLiquidGlass(enabled) }
     fun setMd3NavBar(enabled: Boolean) = launchSettingsAction("update MD3 Navigation Bar") { themeRepository.setMd3NavBar(enabled) }
+    fun setHideNavTabs(enabled: Boolean) = launchSettingsAction("update Hide Navigation Tabs") { themeRepository.setHideNavTabs(enabled) }
     fun setAccentMode(mode: AccentMode) = launchSettingsAction("update accent mode") { themeRepository.setMode(mode) }
     fun setManualAccent(color: Color) = launchSettingsAction("update accent color") { themeRepository.setManualAccent(color) }
     fun openColorWheel() = _uiState.update { it.copy(showColorWheel = true) }
@@ -554,6 +586,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setDynamicNowPlaying(enabled: Boolean) = launchSettingsAction("update dynamic theme") { themeRepository.setDynamicNowPlaying(enabled) }
     fun setUseCustomFont(enabled: Boolean) = launchSettingsAction("update the app font") { settingsPreferences.setUseCustomFont(enabled) }
+    fun setUseBoldFont(enabled: Boolean) = launchSettingsAction("update font weight") { settingsPreferences.setUseBoldFont(enabled) }
     fun setPreferLosslessStreaming(enabled: Boolean) = launchSettingsAction("update streaming preference") { settingsPreferences.setPreferLosslessStreaming(enabled) }
     fun setLosslessQuality(quality: Int) = launchSettingsAction("update streaming quality") { settingsPreferences.setLosslessQuality(quality) }
     fun setDownloadQuality(quality: Int) = launchSettingsAction("update download quality") { settingsPreferences.setDownloadQuality(quality) }
@@ -589,6 +622,19 @@ class SettingsViewModel @Inject constructor(
      *  it automatically in the player; no native call needed here. */
     fun setSystemEffectsMode(enabled: Boolean) = launchSettingsAction("update system effects mode") {
         settingsPreferences.setSystemEffectsMode(enabled)
+    }
+
+    /** Synced Music Video (Settings -> Experimental, default OFF). */
+    fun setMusicVideoEnabled(enabled: Boolean) = launchSettingsAction("update music video setting") {
+        settingsPreferences.setMusicVideoEnabled(enabled)
+    }
+
+    fun setShowAutoEqInVolumePanel(enabled: Boolean) = launchSettingsAction("update show autoeq in volume panel") {
+        settingsPreferences.setShowAutoEqInVolumePanel(enabled)
+    }
+
+    fun setButtonNowPlayingEnabled(enabled: Boolean) = launchSettingsAction("update button now playing setting") {
+        settingsPreferences.setButtonNowPlayingEnabled(enabled)
     }
 
     // ── USB exclusive output (direct DAC, default OFF) ──
@@ -687,7 +733,41 @@ class SettingsViewModel @Inject constructor(
     fun setLyricsFontScale(scale: Float) = launchSettingsAction("update lyrics font scale") {
         settingsPreferences.setLyricsFontScale(scale)
     }
-    fun setCrossfadeEnabled(enabled: Boolean) = launchSettingsAction("update crossfade") { settingsPreferences.setCrossfadeEnabled(enabled) }
+    val autoMixSettings: StateFlow<com.lastwave.app.playback.automix.api.AutoMixSettings> =
+        autoMixPreferences.settings.stateIn(
+            viewModelScope,
+            SharingStarted.Eagerly,
+            com.lastwave.app.playback.automix.api.AutoMixSettings(),
+        )
+
+    fun setAutoMixEnabled(enabled: Boolean) = launchSettingsAction("update automix enabled") {
+        autoMixPreferences.setAutoMixEnabled(enabled)
+        if (enabled) settingsPreferences.setCrossfadeEnabled(false)
+    }
+
+    fun setAutoMixDurationMode(mode: com.lastwave.app.playback.automix.api.TransitionDurationMode) =
+        launchSettingsAction("update automix mode") {
+            autoMixPreferences.setDurationMode(mode)
+        }
+
+    fun setAutoMixTargetSeconds(seconds: Int) = launchSettingsAction("update automix target seconds") {
+        autoMixPreferences.setTargetDurationSeconds(seconds.coerceIn(12, 30))
+    }
+
+    fun setAutoMixSpectralSweeps(enabled: Boolean) = launchSettingsAction("update automix spectral sweeps") {
+        autoMixPreferences.setSpectralFilterSweepsEnabled(enabled)
+    }
+
+
+    fun setAutoMixThermalProfile(profile: com.lastwave.app.playback.automix.api.ThermalProfile) =
+        launchSettingsAction("update automix thermal profile") {
+            autoMixPreferences.setThermalProfile(profile)
+        }
+
+    fun setCrossfadeEnabled(enabled: Boolean) = launchSettingsAction("update crossfade") {
+        settingsPreferences.setCrossfadeEnabled(enabled)
+        if (enabled) autoMixPreferences.setAutoMixEnabled(false)
+    }
     fun setCrossfadeSeconds(seconds: Int) = launchSettingsAction("update crossfade duration") {
         settingsPreferences.setCrossfadeSeconds(seconds.coerceIn(1, 12))
     }
@@ -714,6 +794,9 @@ class SettingsViewModel @Inject constructor(
     }
     fun setCanvasFullBleed(enabled: Boolean) = launchSettingsAction("update canvas full-bleed setting") {
         settingsPreferences.setCanvasFullBleed(enabled)
+    }
+    fun setCanvasGradientBlurEnabled(enabled: Boolean) = launchSettingsAction("update canvas gradient blur setting") {
+        settingsPreferences.setCanvasGradientBlurEnabled(enabled)
     }
     fun setCanvasOverCellular(enabled: Boolean) = launchSettingsAction("update canvas cellular setting") {
         settingsPreferences.setCanvasOverCellular(enabled)
@@ -1080,7 +1163,6 @@ class SettingsViewModel @Inject constructor(
 
     fun setSubmitNowPlaying(enabled: Boolean) = launchSettingsAction("update Now Playing submission") { scrobblerPreferences.setSubmitNowPlaying(enabled) }
     fun setScrobblePercent(percent: Int) = launchSettingsAction("update the scrobble threshold") { scrobblerPreferences.setScrobblePercent(percent) }
-    fun setLiveTelemetryEnabled(enabled: Boolean) = launchSettingsAction("update live telemetry") { settingsPreferences.setLiveTelemetryEnabled(enabled) }
 
     // ── YouTube Music account ──
 

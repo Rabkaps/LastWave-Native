@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Headset
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Schedule
@@ -176,6 +177,9 @@ fun HomeScreen(
     artistAlbumNavigator: com.lastwave.app.ui.navigation.ArtistAlbumNavigator = hiltViewModel<ArtistAlbumNavBridgeHome>().navigator,
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val jamViewModel: com.lastwave.app.ui.jam.LastWaveJamViewModel = hiltViewModel()
+    val jamUiState by jamViewModel.uiState.collectAsStateWithLifecycle()
+    var showJamSheet by remember { mutableStateOf(false) }
     val lifecycleOwner = LocalLifecycleOwner.current
 
     LaunchedEffect(viewModel) {
@@ -319,8 +323,8 @@ fun HomeScreen(
                     ) {
                         itemsIndexed(
                             rows,
-                            key = { _, row ->
-                                when (row) {
+                            key = { index, row ->
+                                val base = when (row) {
                                     is HomeRow.DateHeader -> "date_${row.label}"
                                     is HomeRow.Track -> if (row.track.isNowPlaying) {
                                         "nowplaying_${row.track.key}"
@@ -330,6 +334,7 @@ fun HomeScreen(
                                     is HomeRow.Album -> "album_${row.album.artist}_${row.album.name}"
                                     is HomeRow.Artist -> "artist_${row.artist.name}"
                                 }
+                                "${base}_$index"
                             },
                             contentType = { _, row ->
                                 when (row) {
@@ -428,6 +433,12 @@ fun HomeScreen(
         )
     }
 
+    if (showJamSheet) {
+        com.lastwave.app.ui.jam.LastWaveJamSheet(
+            viewModel = jamViewModel,
+            onDismiss = { showJamSheet = false },
+        )
+    }
 }
 
 private suspend fun snapshotFlowNearEnd(listState: LazyListState, onNearEnd: () -> Unit) {
@@ -902,7 +913,12 @@ private fun MixHeader(sortMode: HomeSortMode, onSortModeChange: (HomeSortMode) -
                 color = MaterialTheme.colorScheme.surfaceContainerHighest,
                 tonalElevation = 1.dp,
                 interactionSource = pillInteractionSource,
-                modifier = Modifier.heightIn(min = 34.dp).scale(pillScale),
+                modifier = Modifier
+                    .heightIn(min = 34.dp)
+                    .graphicsLayer {
+                        scaleX = pillScale
+                        scaleY = pillScale
+                    },
             ) {
                 Row(
                     modifier = Modifier.padding(horizontal = 13.dp, vertical = 6.dp),
@@ -1406,7 +1422,7 @@ private fun ArtistRow(
                 modifier = Modifier.size(52.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerHighest),
             ) {
                 ArtworkImage(
-                    name = artist.name,
+                    name = "artist:${artist.name}",
                     artist = artist.name,
                     embeddedUrl = artist.artworkUrl,
                     fallbackIcon = Icons.Filled.People,

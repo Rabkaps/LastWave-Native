@@ -299,7 +299,7 @@ fun FluidArtworkBackground(
     modifier: Modifier = Modifier,
     extraBlur: Boolean = false,
     rotatingBackgroundEnabled: Boolean = true,
-    lyricsRotatingBackgroundEnabled: Boolean = true,
+    lyricsRotatingBackgroundEnabled: Boolean = false,
     artworkViewModel: ArtworkViewModel = hiltViewModel(),
     fallback: @Composable () -> Unit,
 ) {
@@ -314,20 +314,35 @@ fun FluidArtworkBackground(
 
     val context = LocalContext.current
     val embeddedUrl = track.artworkUrl
-    val isReal = remember(embeddedUrl) { ArtworkNormalizer.isRealImage(embeddedUrl) }
-    
+
     val key = remember(track.title, track.artist) { ArtworkNormalizer.cacheKey(track.title, track.artist) }
     val resolvedUrl by remember(key) {
         artworkViewModel.resolved.map { it[key] }.distinctUntilChanged()
     }.collectAsStateWithLifecycle(initialValue = artworkViewModel.resolved.value[key])
-    
-    LaunchedEffect(key) {
-        if (!isReal && resolvedUrl.isNullOrBlank()) {
+
+    val localCover = embeddedUrl?.startsWith("file://") == true
+    val highResUrl = resolvedUrl?.takeIf { it.isNotBlank() }
+    val useHighRes = highResUrl != null
+
+    LaunchedEffect(key, localCover) {
+        if (localCover) return@LaunchedEffect
+        if (resolvedUrl == null) {
             artworkViewModel.resolve(track.title, track.artist)
         }
     }
-    
-    val artworkUrl = if (isReal) embeddedUrl else resolvedUrl
+
+    // High-resolution master artwork from metadata providers (Apple Music/Tidal/Deezer/Spotify/YTMusic)
+    // takes priority for the player wallpaper background.
+    // While resolving in background, embeddedUrl (upscaled) is shown as immediate placeholder.
+    val artworkUrl = if (localCover) {
+        embeddedUrl
+    } else if (useHighRes) {
+        highResUrl
+    } else if (ArtworkNormalizer.isRealImage(embeddedUrl)) {
+        ArtworkNormalizer.upscaleYoutubeArtwork(embeddedUrl)
+    } else {
+        null
+    }
     
     var current by remember { mutableStateOf<Bitmap?>(null) }
     var previous by remember { mutableStateOf<Bitmap?>(null) }
@@ -363,6 +378,8 @@ fun FluidArtworkBackground(
     }
 
     var seconds by remember { mutableFloatStateOf(0f) }
+    var cachedSigma by remember { mutableFloatStateOf(0f) }
+    var cachedRenderEffect by remember { mutableStateOf<androidx.compose.ui.graphics.RenderEffect?>(null) }
     val shouldPauseLoop = extraBlur && !lyricsRotatingBackgroundEnabled
     LaunchedEffect(!shouldPauseLoop) {
         if (shouldPauseLoop) return@LaunchedEffect
@@ -393,12 +410,15 @@ fun FluidArtworkBackground(
                         alpha = appear.value
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                             val sigma = fluidBlurSigma(size.width, size.height, extraBlur)
-                            // A haunted GPU driver must cost us the blur, never the process.
-                            renderEffect = runCatching {
-                                RenderEffect
-                                    .createBlurEffect(sigma, sigma, Shader.TileMode.CLAMP)
-                                    .asComposeRenderEffect()
-                            }.getOrNull()
+                            if (sigma != cachedSigma || cachedRenderEffect == null) {
+                                cachedSigma = sigma
+                                cachedRenderEffect = runCatching {
+                                    RenderEffect
+                                        .createBlurEffect(sigma, sigma, Shader.TileMode.CLAMP)
+                                        .asComposeRenderEffect()
+                                }.getOrNull()
+                            }
+                            renderEffect = cachedRenderEffect
                         }
                     }
                     .drawBehind {

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22.1)
 project(lastwave_audio LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -52,6 +52,10 @@ add_library(
     ParametricEqBridge.cpp
     NativeBridge.cpp
     SecretsBridge.cpp
+    automix/AutoMixJniBridge.cpp
+    automix/LinkwitzRileyCrossover.cpp
+    automix/TransientPreservingStretcher.cpp
+    automix/LufsContourNormalizer.cpp
 )
 
 target_include_directories(

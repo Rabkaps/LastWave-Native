@@ -65,8 +65,8 @@ android {
         applicationId 'com.lastwave.app'
         minSdk = (project.findProperty("minSdk") as String)?.toInteger() ?: 29
         targetSdk 35
-        versionCode 26
-        versionName '4.3.1'
+        versionCode 27
+        versionName '5.0.0'
 
         def lastWaveLyricsToken = resolveSecret("LASTWAVE_LYRICS_TOKEN")
         def lastWaveLyricsUrl = resolveSecret("LASTWAVE_LYRICS_URL")
@@ -236,6 +236,7 @@ dependencies {
     implementation libs.androidx.profileinstaller
 
     implementation 'androidx.media3:media3-exoplayer:1.2.1'
+    implementation 'androidx.media3:media3-datasource-okhttp:1.2.1'
     implementation 'androidx.media3:media3-exoplayer-hls:1.2.1'
     implementation 'androidx.media3:media3-exoplayer-dash:1.2.1'
     implementation 'androidx.media:media:1.7.0'
@@ -246,7 +247,7 @@ dependencies {
     implementation 'com.google.oboe:oboe:1.10.0'
     implementation libs.newpipe.extractor
     runtimeOnly libs.innertubex
-    runtimeOnly 'io.ktor:ktor-client-cio:3.5.2'
+    runtimeOnly 'io.ktor:ktor-client-cio:3.6.0'
 
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'com.google.truth:truth:1.4.2'

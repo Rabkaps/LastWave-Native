@@ -48,6 +48,7 @@ class AddonClient(
             reqBuilder.header("X-LW-Sign", nativeSigned.second)
             return
         }
+        Log.d(TAG, "Native addon signing unavailable; using fallback signer")
 
         // 2. Fallback to Java HMAC if clientSecret provided or default known secret
         val secret = clientSecret?.takeIf { it.isNotBlank() } ?: DEFAULT_ADDON_SECRET
@@ -112,12 +113,10 @@ class AddonClient(
                 val body = res.body?.string().orEmpty()
                 val rootElement = runCatching { json.parseToJsonElement(body) }.getOrNull()
                 val tracks = when (rootElement) {
-                    is JsonArray -> runCatching { json.decodeFromJsonElement<List<AddonTrack>>(rootElement) }.getOrNull()
+                    is JsonArray -> decodeTracks(rootElement)
                     is JsonObject -> {
                         val tracksElement = rootElement["tracks"] ?: rootElement["data"] ?: rootElement["results"] ?: rootElement["items"]
-                        if (tracksElement is JsonArray) {
-                            runCatching { json.decodeFromJsonElement<List<AddonTrack>>(tracksElement) }.getOrNull()
-                        } else null
+                        if (tracksElement is JsonArray) decodeTracks(tracksElement) else null
                     }
                     else -> null
                 } ?: json.decodeFromString<AddonSearchResponse>(body).tracks
@@ -128,6 +127,13 @@ class AddonClient(
             Result.failure(e)
         }
     }
+
+    /** One malformed entry must not discard every other result. */
+    private fun decodeTracks(items: JsonArray): List<AddonTrack> =
+        items.mapNotNull { item ->
+            runCatching { json.decodeFromJsonElement<AddonTrack>(item) }.getOrNull()
+                ?.takeIf { it.id.isNotBlank() && it.title.isNotBlank() }
+        }
 
     suspend fun stream(
         trackId: String,
@@ -144,12 +150,13 @@ class AddonClient(
 
         try {
             val reqBuilder = Request.Builder().url(url).get()
-            if (isDownload) {
-                reqBuilder.header("X-LW-Intent", "download")
-                reqBuilder.header("User-Agent", "LastWave-Downloader/1.0")
-            } else {
+            val useStreamIntent = !isDownload || atmos || quality.equals("atmos", ignoreCase = true)
+            if (useStreamIntent) {
                 reqBuilder.header("X-LW-Intent", "stream")
                 reqBuilder.header("User-Agent", "LastWave-Player/1.0")
+            } else {
+                reqBuilder.header("X-LW-Intent", "download")
+                reqBuilder.header("User-Agent", "LastWave-Downloader/1.0")
             }
             signRequest(url, "GET", reqBuilder)
             val req = reqBuilder.build()
@@ -211,12 +218,43 @@ class AddonClient(
         private const val DEFAULT_ADDON_SECRET = "36d96a751b12ee481c281a8a8e64c482d0c1634a22061ab72f40175017818b85"
 
         fun normalizeBase(raw: String): String {
-            val trimmed = raw.trim().trimEnd('/')
-            return if (trimmed.endsWith("/manifest.json", ignoreCase = true)) {
-                trimmed.substringBeforeLast("/manifest.json").trimEnd('/')
+            if (raw.isBlank()) return ""
+            // 1. Strip all ASCII whitespace, Unicode invisible / zero-width characters and BOM
+            val sanitized = raw
+                .replace(Regex("""[\u200B-\u200D\uFEFF\u00A0\u200E\u200F\u0000-\u001F]"""), "")
+                .trim()
+                .trimEnd('/')
+
+            if (sanitized.isBlank()) return ""
+
+            // 2. Ensure scheme is present (default to https:// if omitted by user)
+            val withScheme = if (!sanitized.startsWith("http://", ignoreCase = true) &&
+                !sanitized.startsWith("https://", ignoreCase = true)
+            ) {
+                "https://$sanitized"
             } else {
-                trimmed
+                sanitized
             }
+
+            // 3. Strip query parameters and hash fragments
+            val withoutQuery = withScheme.substringBefore('?').substringBefore('#').trimEnd('/')
+
+            // 4. Strip known trailing endpoints (e.g. /manifest.json, /manifest, /search, /stream)
+            val knownSuffixes = listOf(
+                "/manifest.json",
+                "/manifest",
+                "/search",
+                "/stream",
+            )
+            var cleanUrl = withoutQuery
+            for (suffix in knownSuffixes) {
+                if (cleanUrl.endsWith(suffix, ignoreCase = true)) {
+                    cleanUrl = cleanUrl.substring(0, cleanUrl.length - suffix.length).trimEnd('/')
+                    break
+                }
+            }
+
+            return cleanUrl
         }
     }
 }

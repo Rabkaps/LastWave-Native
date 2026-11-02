@@ -38,7 +38,8 @@ class ExclusiveUsbOutput @Inject constructor(
     @ApplicationContext context: Context,
 ) {
     private val appContext = context.applicationContext
-    private val lock = Any()
+    private val configLock = Any()
+    private val stateLock = Any()
 
     @Volatile private var wanted = false
     @Volatile private var active = false
@@ -102,26 +103,32 @@ class ExclusiveUsbOutput @Inject constructor(
             if (intent?.action != VOLUME_CHANGED_ACTION) return
             val streamType = intent.getIntExtra(EXTRA_VOLUME_STREAM_TYPE, AudioManager.STREAM_MUSIC)
             if (streamType != AudioManager.STREAM_MUSIC) return
-            syncListeningGain()
+            val extraVol = intent.getIntExtra("android.media.EXTRA_VOLUME_STREAM_VALUE", -1).takeIf { it >= 0 }
+            syncListeningGain(extraVol)
         }
     }
 
     fun setWanted(enabled: Boolean) {
-        synchronized(lock) {
-            if (wanted == enabled) {
-                if (enabled) {
+        if (wanted == enabled) {
+            if (enabled) {
+                synchronized(stateLock) {
                     ensureVolumeObserverLocked()
                     syncListeningGainLocked()
                 }
-                return
             }
+            return
+        }
+        synchronized(configLock) {
+            if (wanted == enabled) return
             wanted = enabled
             if (!enabled) {
                 teardownLocked(closeDevice = true)
             } else {
                 clearBlockedDevices()
-                ensureVolumeObserverLocked()
-                syncListeningGainLocked()
+                synchronized(stateLock) {
+                    ensureVolumeObserverLocked()
+                    syncListeningGainLocked()
+                }
             }
         }
     }
@@ -134,14 +141,15 @@ class ExclusiveUsbOutput @Inject constructor(
      * attenuations never stack. Switching back takes effect at the next start.
      */
     fun setForceSoftwareVolume(value: Boolean) {
-        synchronized(lock) {
+        synchronized(stateLock) {
             if (forceSoftwareVolume == value) return
             forceSoftwareVolume = value
             if (value && active && hardwareVolume) {
-                runCatching { featureVolume?.setNormalized(1f) }
+                val fv = featureVolume
                 hardwareVolume = false
                 lastAppliedCombined = Float.NaN
                 applyVolumeLocked()
+                runCatching { fv?.setNormalized(1f) }
                 Log.i(TAG, "volume forced to software; Feature Unit parked at 0 dB")
             }
         }
@@ -259,8 +267,8 @@ class ExclusiveUsbOutput @Inject constructor(
         }
     }
 
-    fun syncListeningGain() {
-        val stream = readStreamMusicGain() ?: return
+    fun syncListeningGain(explicitVol: Int? = null) {
+        val stream = readStreamMusicGain(explicitVol) ?: return
         // While the attach-time 100% pin is held off with the remembered
         // level, keep ignoring pinned max readings. The next real sub-max
         // change (a volume key press) ends the hold and applies normally.
@@ -273,7 +281,7 @@ class ExclusiveUsbOutput @Inject constructor(
             listeningGain = next
             return
         }
-        synchronized(lock) {
+        synchronized(stateLock) {
             listeningGain = next
             applyVolumeLocked()
         }
@@ -311,7 +319,7 @@ class ExclusiveUsbOutput @Inject constructor(
             rateOverrideHz != null -> 24
             else -> 16
         }
-        synchronized(lock) {
+        synchronized(configLock) {
             if (!wanted) return false
             return runCatching {
                 // Converted fallback PCM always arrives as Float32 from the
@@ -428,7 +436,7 @@ class ExclusiveUsbOutput @Inject constructor(
         val running = stream ?: return false
         if (running.isAlive) return false
         if (!running.start()) return false
-        synchronized(lock) {
+        synchronized(stateLock) {
             paused = false
             mediaTimeBaseFrames = running.framesWritten
         }
@@ -455,7 +463,7 @@ class ExclusiveUsbOutput @Inject constructor(
             paused = false
             pcmLock.notifyAll()
         }
-        synchronized(lock) {
+        synchronized(stateLock) {
             pendingVolume = 1f
             applyVolumeLocked()
         }
@@ -466,13 +474,13 @@ class ExclusiveUsbOutput @Inject constructor(
     }
 
     fun reset() {
-        synchronized(lock) {
+        synchronized(configLock) {
             teardownLocked(closeDevice = true)
         }
     }
 
     fun release() {
-        synchronized(lock) {
+        synchronized(configLock) {
             wanted = false
             teardownLocked(closeDevice = true)
         }
@@ -480,7 +488,7 @@ class ExclusiveUsbOutput @Inject constructor(
 
     fun setVolume(volume: Float) {
         val normalized = volume.coerceIn(0f, 1f)
-        synchronized(lock) {
+        synchronized(stateLock) {
             pendingVolume = normalized
             applyVolumeLocked()
         }
@@ -516,12 +524,14 @@ class ExclusiveUsbOutput @Inject constructor(
             useFloatWrite == floatSource
         ) {
             currentFallbackNegotiated = rateOverrideHz != null
-            paused = false
-            startMediaTimeNeedsInit = true
-            mediaTimeBaseFrames = reuse.framesWritten
-            ensureVolumeObserverLocked()
-            pendingVolume = 1f
-            syncListeningGainLocked()
+            synchronized(stateLock) {
+                paused = false
+                startMediaTimeNeedsInit = true
+                mediaTimeBaseFrames = reuse.framesWritten
+                ensureVolumeObserverLocked()
+                pendingVolume = 1f
+                syncListeningGainLocked()
+            }
             return true
         }
 
@@ -641,6 +651,9 @@ class ExclusiveUsbOutput @Inject constructor(
         val feedbackPacketSize = selectedFeedback?.maxPacketSize?.let { isoPacketBytes(it) }
             ?: info.feedbackPacketSize
         val feedbackInterval = selectedFeedback?.interval?.coerceAtLeast(1) ?: dataInterval
+        val pollFeedback = selectedFeedback != null &&
+            UsbAudioDevice.needsContinuousFeedback(usbDevice.vendorId, usbDevice.productId)
+        if (pollFeedback) waitForClockValid()
         val created = UsbAudioStream(
             info.fd,
             info.interfaceId,
@@ -653,6 +666,7 @@ class ExclusiveUsbOutput @Inject constructor(
             dataInterval,
             feedbackPacketSize,
             feedbackInterval,
+            pollFeedback,
         )
         if (!created.isReady || !created.start()) {
             created.release()
@@ -702,20 +716,31 @@ class ExclusiveUsbOutput @Inject constructor(
                 "hardwareVolume=$hardwareVolume",
         )
 
-        ensureVolumeObserverLocked()
-        rememberStreamGain(readStreamMusicGain())
-        listeningGain = listeningGainForDac()
-        lastAppliedCombined = Float.NaN
-        applyVolumeLocked()
+        synchronized(stateLock) {
+            ensureVolumeObserverLocked()
+            rememberStreamGain(readStreamMusicGain())
+            listeningGain = listeningGainForDac()
+            lastAppliedCombined = Float.NaN
+            applyVolumeLocked()
+        }
         Log.i(
             TAG,
             "exclusive volume hardware=$hardwareVolume listening=$listeningGain softwareGain=$softwareGainValue",
         )
         sessionSummary = "started rate=${effectiveRate}Hz alt=$alt wireBits=$wireBits reported=$reported " +
             "clockMatched=$clockMatched fallback=$autoNegotiatedFallback hardwareVolume=$hardwareVolume " +
-            "maxPacket=$maxPacket interval=$dataInterval feedback=${selectedFeedback != null}"
+            "maxPacket=$maxPacket interval=$dataInterval feedback=${selectedFeedback != null} feedbackPolled=$pollFeedback"
         startWriterLocked(created)
         return true
+    }
+
+    /** Bounded: a DAC that never reports a valid clock still gets the stream. */
+    private fun waitForClockValid() {
+        repeat(CLOCK_VALID_TRIES) {
+            if (usbAudio.readClockValid()) return
+            Thread.sleep(CLOCK_VALID_STEP_MS)
+        }
+        Log.w(TAG, "DAC clock not reported valid; starting stream anyway")
     }
 
     // ── Fork: safety guard + diagnostics ──
@@ -739,7 +764,7 @@ class ExclusiveUsbOutput @Inject constructor(
      * track does not blast it again, and let the sink fall back.
      */
     fun abortUnhealthy(reason: String) {
-        synchronized(lock) {
+        synchronized(configLock) {
             if (!active) return
             val key = currentDeviceKey
             Log.w(TAG, "Exclusive USB aborted: $reason (device $key)")
@@ -791,12 +816,27 @@ class ExclusiveUsbOutput @Inject constructor(
         volumeReceiverRegistered = false
     }
 
-    private fun readStreamMusicGain(): Float? {
+    @Volatile private var cachedMaxVolume = -1
+    @Volatile private var lastKnownStreamGain: Float = 1f
+    @Volatile private var lastStreamGainReadMs = 0L
+
+    private fun readStreamMusicGain(explicitVol: Int? = null): Float? {
         val manager = audioManager ?: return null
-        val max = runCatching { manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }.getOrDefault(0)
+        val max = if (cachedMaxVolume > 0) cachedMaxVolume else {
+            runCatching { manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) }.getOrDefault(0).also {
+                if (it > 0) cachedMaxVolume = it
+            }
+        }
         if (max <= 0) return null
-        val vol = runCatching { manager.getStreamVolume(AudioManager.STREAM_MUSIC) }.getOrDefault(max)
+        val now = SystemClock.elapsedRealtime()
+        val vol = explicitVol ?: if (now - lastStreamGainReadMs < 1500L) {
+            (lastKnownStreamGain * max).toInt()
+        } else {
+            lastStreamGainReadMs = now
+            runCatching { manager.getStreamVolume(AudioManager.STREAM_MUSIC) }.getOrDefault(max)
+        }
         val gain = vol.coerceIn(0, max).toFloat() / max
+        lastKnownStreamGain = gain
         rememberStreamGain(gain)
         return gain
     }
@@ -929,7 +969,9 @@ class ExclusiveUsbOutput @Inject constructor(
             runCatching { running.release() }
         }
         stream = null
-        active = false
+        synchronized(stateLock) {
+            active = false
+        }
     }
 
     private fun teardownLocked(closeDevice: Boolean) {
@@ -938,22 +980,24 @@ class ExclusiveUsbOutput @Inject constructor(
             runCatching { usbAudio.closeDevice() }
             connection = null
         }
-        featureVolume = null
-        featureVolumeAttached = false
-        volumeProbed = false
-        ignoreStreamMusicMax = false
-        hardwareVolume = false
-        clockMatched = false
-        currentFallbackNegotiated = false
-        configuredRateHz = 0
-        active = false
-        softwareGainValue = 1f
-        lastAppliedCombined = Float.NaN
-        startMediaTimeNeedsInit = true
-        startMediaTimeUs = 0L
-        mediaTimeBaseFrames = 0L
-        paused = false
-        if (closeDevice) unregisterVolumeObserverLocked()
+        synchronized(stateLock) {
+            featureVolume = null
+            featureVolumeAttached = false
+            volumeProbed = false
+            ignoreStreamMusicMax = false
+            hardwareVolume = false
+            clockMatched = false
+            currentFallbackNegotiated = false
+            configuredRateHz = 0
+            active = false
+            softwareGainValue = 1f
+            lastAppliedCombined = Float.NaN
+            startMediaTimeNeedsInit = true
+            startMediaTimeUs = 0L
+            mediaTimeBaseFrames = 0L
+            paused = false
+            if (closeDevice) unregisterVolumeObserverLocked()
+        }
     }
 
     private class QueuedPcm(
@@ -1037,9 +1081,11 @@ class ExclusiveUsbOutput @Inject constructor(
                     while (i + 2 < bytes.size) {
                         val b0 = bytes[i].toInt() and 0xFF
                         val b1 = bytes[i + 1].toInt() and 0xFF
-                        val b2 = bytes[i + 2].toInt()
+                        val b2 = bytes[i + 2].toInt() and 0xFF
                         var sample = (b2 shl 16) or (b1 shl 8) or b0
-                        if (sample and 0x800000 != 0) sample -= 0x1000000
+                        if ((sample and 0x800000) != 0) {
+                            sample = (sample shl 8) shr 8
+                        }
                         val scaled = (sample * gain.toDouble() + if (sample >= 0) 0.5 else -0.5).toInt()
                             .coerceIn(-0x800000, 0x7FFFFF)
                         bytes[i] = (scaled and 0xFF).toByte()
@@ -1054,9 +1100,9 @@ class ExclusiveUsbOutput @Inject constructor(
                         val b0 = bytes[i].toInt() and 0xFF
                         val b1 = bytes[i + 1].toInt() and 0xFF
                         val b2 = bytes[i + 2].toInt() and 0xFF
-                        val b3 = bytes[i + 3].toInt()
-                        val sample = (b3.toLong() shl 24) or (b2.toLong() shl 16) or (b1.toLong() shl 8) or (b0.toLong() and 0xFF)
-                        val scaled = (sample * gain.toDouble()).toLong()
+                        val b3 = bytes[i + 3].toInt() and 0xFF
+                        val sample = (b3 shl 24) or (b2 shl 16) or (b1 shl 8) or b0
+                        val scaled = (sample.toDouble() * gain.toDouble()).toLong()
                             .coerceIn(Int.MIN_VALUE.toLong(), Int.MAX_VALUE.toLong()).toInt()
                         bytes[i] = (scaled and 0xFF).toByte()
                         bytes[i + 1] = ((scaled shr 8) and 0xFF).toByte()

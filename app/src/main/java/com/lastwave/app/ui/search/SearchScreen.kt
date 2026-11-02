@@ -1,5 +1,12 @@
 package com.lastwave.app.ui.search
 
+import android.app.Activity
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.speech.RecognizerIntent
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -26,6 +33,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -40,6 +48,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
@@ -144,6 +153,19 @@ fun SearchScreen(
     val focusManager = LocalFocusManager.current
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
+    val context = LocalContext.current
+    val voiceSearchLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val spokenQuery = result.data
+                ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+                ?.firstOrNull()
+            if (!spokenQuery.isNullOrBlank()) {
+                viewModel.executeSearch(spokenQuery)
+            }
+        }
+    }
 
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
@@ -269,6 +291,40 @@ fun SearchScreen(
                             }
                         },
                     )
+
+                    IconButton(
+                        onClick = {
+                            focusManager.clearFocus()
+                            keyboardController?.hide()
+                            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                putExtra(
+                                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM,
+                                )
+                                putExtra(
+                                    RecognizerIntent.EXTRA_PROMPT,
+                                    context.getString(R.string.search_voice_prompt),
+                                )
+                                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
+                            }
+                            try {
+                                voiceSearchLauncher.launch(intent)
+                            } catch (_: ActivityNotFoundException) {
+                                Toast.makeText(
+                                    context,
+                                    R.string.search_voice_unavailable,
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        },
+                        modifier = Modifier.size(48.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Mic,
+                            contentDescription = stringResource(R.string.search_voice_cd),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
 
                 Spacer(Modifier.height(10.dp))
@@ -289,6 +345,9 @@ fun SearchScreen(
                         val q = state.query.trim().lowercase()
                         if (q.isEmpty()) emptyList()
                         else state.recentSearches.filter { it.lowercase().contains(q) }.take(3)
+                    }
+                    val nonRecentSuggestions = remember(state.suggestions, matchingRecent) {
+                        state.suggestions.filter { !matchingRecent.contains(it) }.distinct()
                     }
 
                     LazyColumn(
@@ -328,7 +387,7 @@ fun SearchScreen(
                         }
 
                         if (matchingRecent.isNotEmpty()) {
-                            items(matchingRecent, key = { "recent_match_$it" }) { recentText ->
+                            itemsIndexed(matchingRecent.distinct(), key = { idx, recentText -> "recent_match_${recentText}_$idx" }) { _, recentText ->
                                 SuggestionRow(
                                     fullText = recentText,
                                     query = state.query,
@@ -342,7 +401,7 @@ fun SearchScreen(
                             }
                         }
 
-                        items(state.suggestions.filter { !matchingRecent.contains(it) }, key = { "sugg_$it" }) { suggestion ->
+                        itemsIndexed(nonRecentSuggestions, key = { idx, suggestion -> "sugg_${suggestion}_$idx" }) { _, suggestion ->
                             SuggestionRow(
                                 fullText = suggestion,
                                 query = state.query,
@@ -386,7 +445,7 @@ fun SearchScreen(
                                     }
                                 }
                             }
-                            items(state.recentSearches, key = { "hist_$it" }) { recentQuery ->
+                            itemsIndexed(state.recentSearches.distinct(), key = { idx, recentQuery -> "hist_${recentQuery}_$idx" }) { _, recentQuery ->
                                 RecentSearchRow(
                                     text = recentQuery,
                                     onClick = {
@@ -485,7 +544,7 @@ fun SearchScreen(
                                     ),
                                 ) {
                                     if (topResult != null && state.tab != SearchTab.USERS) {
-                                        val isTopPlaying = state.tab == SearchTab.TRACKS && playbackState.isPlaying &&
+                                        val isTopPlaying = (state.tab == SearchTab.TRACKS || state.tab == SearchTab.PODCASTS) && playbackState.isPlaying &&
                                             playbackState.current?.title.equals(topResult.name, ignoreCase = true) &&
                                             (topResult.artist.isNullOrBlank() || playbackState.current?.artist.equals(topResult.artist, ignoreCase = true))
 
@@ -507,7 +566,7 @@ fun SearchScreen(
                                                 },
                                                 onMenu = {
                                                     menuTarget = when (state.tab) {
-                                                        SearchTab.TRACKS -> TrackMenuTarget.Track(topResult.name, topResult.artist.orEmpty(), topResult.url)
+                                                        SearchTab.TRACKS, SearchTab.PODCASTS -> TrackMenuTarget.Track(topResult.name, topResult.artist.orEmpty(), topResult.url)
                                                         SearchTab.ARTISTS -> TrackMenuTarget.Artist(topResult.name, topResult.url)
                                                         SearchTab.ALBUMS -> TrackMenuTarget.Album(topResult.name, topResult.artist.orEmpty(), topResult.url)
                                                         SearchTab.PLAYLISTS, SearchTab.USERS -> null
@@ -518,12 +577,13 @@ fun SearchScreen(
                                         }
                                     }
 
-                                    items(
-                                        if (state.tab == SearchTab.USERS) state.results else otherResults,
-                                        key = { it.entityId ?: it.url.ifBlank { it.name + it.artist.orEmpty() } },
-                                        contentType = { "search_result" },
-                                    ) { item ->
-                                        val isItemPlaying = state.tab == SearchTab.TRACKS && playbackState.isPlaying &&
+                                    val displayResults = if (state.tab == SearchTab.USERS) state.results else otherResults
+                                    itemsIndexed(
+                                        displayResults,
+                                        key = { index, item -> "${item.entityId ?: item.url.ifBlank { "${item.name}_${item.artist.orEmpty()}" }}_$index" },
+                                        contentType = { _, _ -> "search_result" },
+                                    ) { _, item ->
+                                        val isItemPlaying = (state.tab == SearchTab.TRACKS || state.tab == SearchTab.PODCASTS) && playbackState.isPlaying &&
                                             playbackState.current?.title.equals(item.name, ignoreCase = true) &&
                                             (item.artist.isNullOrBlank() || playbackState.current?.artist.equals(item.artist, ignoreCase = true))
 
@@ -546,7 +606,7 @@ fun SearchScreen(
                                             },
                                             onMenu = {
                                                 menuTarget = when (state.tab) {
-                                                    SearchTab.TRACKS -> TrackMenuTarget.Track(item.name, item.artist.orEmpty(), item.url)
+                                                    SearchTab.TRACKS, SearchTab.PODCASTS -> TrackMenuTarget.Track(item.name, item.artist.orEmpty(), item.url)
                                                     SearchTab.ARTISTS -> TrackMenuTarget.Artist(item.name, item.url)
                                                     SearchTab.ALBUMS -> TrackMenuTarget.Album(item.name, item.artist.orEmpty(), item.url)
                                                     SearchTab.PLAYLISTS, SearchTab.USERS -> null
@@ -567,7 +627,7 @@ fun SearchScreen(
     menuTarget?.let { target ->
         TrackContextMenuSheet(
             target = target,
-            capabilities = TrackMenuCapabilities(showCopyActions = true, showDeleteScrobble = true),
+            capabilities = TrackMenuCapabilities(showCopyActions = true, showDeleteScrobble = state.tab != SearchTab.PODCASTS),
             playbackSourceLabel = "Search",
             onDismiss = { menuTarget = null },
         )
@@ -637,6 +697,7 @@ private fun TopResultCard(
         ) {
             val fallback = when (tab) {
                 SearchTab.TRACKS -> if (isPlaying) Icons.Filled.GraphicEq else Icons.Filled.MusicNote
+                SearchTab.PODCASTS -> if (isPlaying) Icons.Filled.GraphicEq else Icons.Filled.Mic
                 SearchTab.ARTISTS -> Icons.Filled.Person
                 SearchTab.ALBUMS -> Icons.Filled.Album
                 SearchTab.PLAYLISTS -> Icons.AutoMirrored.Filled.QueueMusic
@@ -670,6 +731,7 @@ private fun TopResultCard(
                     Text(
                         when (tab) {
                             SearchTab.TRACKS -> "TOP SONG"
+                            SearchTab.PODCASTS -> "TOP PODCAST"
                             SearchTab.ARTISTS -> "TOP ARTIST"
                             SearchTab.ALBUMS -> "TOP ALBUM"
                             SearchTab.PLAYLISTS -> "TOP PLAYLIST"
@@ -690,6 +752,7 @@ private fun TopResultCard(
                 )
                 val subtitle = when (tab) {
                     SearchTab.TRACKS -> item.artist.orEmpty()
+                    SearchTab.PODCASTS -> listOfNotNull(item.artist, item.subtitle).distinct().joinToString(" • ")
                     SearchTab.ALBUMS -> item.artist.orEmpty()
                     SearchTab.PLAYLISTS -> item.subtitle.orEmpty()
                     SearchTab.ARTISTS -> item.subtitle.orEmpty().ifBlank { "Artist" }
@@ -886,6 +949,7 @@ private fun SearchResultRow(
     ) {
         val fallback = when (tab) {
             SearchTab.TRACKS -> if (isPlaying) Icons.Filled.GraphicEq else Icons.Filled.MusicNote
+            SearchTab.PODCASTS -> if (isPlaying) Icons.Filled.GraphicEq else Icons.Filled.Mic
             SearchTab.ARTISTS -> Icons.Filled.Person
             SearchTab.ALBUMS -> Icons.Filled.Album
             SearchTab.PLAYLISTS -> Icons.AutoMirrored.Filled.QueueMusic
@@ -915,11 +979,12 @@ private fun SearchResultRow(
                 overflow = TextOverflow.Ellipsis,
             )
             val subtitle = when (tab) {
-                SearchTab.TRACKS -> listOfNotNull(item.artist, item.subtitle).joinToString(" \u00b7 ")
+                SearchTab.TRACKS -> listOfNotNull(item.artist, item.subtitle).joinToString(" \u2022 ")
+                SearchTab.PODCASTS -> listOfNotNull(item.artist, item.subtitle).distinct().joinToString(" \u2022 ")
                 SearchTab.ALBUMS -> item.subtitle ?: item.artist.orEmpty()
                 SearchTab.PLAYLISTS -> item.subtitle.orEmpty()
                 SearchTab.ARTISTS -> item.subtitle.orEmpty()
-                SearchTab.USERS -> listOfNotNull(item.artist, item.listeners?.let { "$it scrobbles" }).joinToString(" \u00b7 ")
+                SearchTab.USERS -> listOfNotNull(item.artist, item.listeners?.let { "$it scrobbles" }).joinToString(" \u2022 ")
             }
             if (subtitle.isNotBlank()) {
                 Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -946,6 +1011,7 @@ private fun SearchFilterPills(
 ) {
     val tabs = listOf(
         SearchTab.TRACKS to R.string.search_tab_tracks,
+        SearchTab.PODCASTS to R.string.search_tab_podcasts,
         SearchTab.ARTISTS to R.string.search_tab_artists,
         SearchTab.ALBUMS to R.string.search_tab_albums,
         SearchTab.PLAYLISTS to R.string.search_tab_playlists,
@@ -995,4 +1061,3 @@ private fun SearchFilterPills(
         }
     }
 }
-

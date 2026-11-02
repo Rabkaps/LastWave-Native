@@ -64,8 +64,21 @@ val SavedPlaylist.isYouTubeOnly: Boolean
 private const val MAX_SAVED_PLAYLISTS = 20
 private const val STARTUP_SYNC_WAIT_MS = 2_000L
 private const val TAG = "PlaylistRepository"
-const val LIKED_SONGS_MODE = "liked"
-const val LIKED_SONGS_TITLE = "Liked Songs"
+    const val LIKED_SONGS_MODE = "liked"
+
+    /**
+     * This app's own liked list.
+     *
+     * Named apart from YouTube Music's "Liked Music" so the two are never confused: they
+     * hold the same songs, and each of them can be switched off on its own.
+     */
+    const val LIKED_SONGS_TITLE = "Liked Songs"
+
+    /** YouTube Music's own liked list. */
+    const val LIKED_YT_SONGS_TITLE = "Liked Yt Song"
+
+    /** What this app's liked list was called before it was renamed. */
+    const val LEGACY_LIKED_SONGS_TITLE = "Liked Local Song"
 /** Built-in playlist holding audio files imported from the device. */
 const val LOCAL_SONGS_MODE = "local"
 const val LOCAL_SONGS_TITLE = "Local songs"
@@ -267,7 +280,7 @@ class PlaylistRepository @Inject constructor(
         existing.firstOrNull {
             it.mode == mode &&
                 it.title.equals(title, ignoreCase = true) &&
-                sameOrderedTrackIdentity(it.tracks, playableTracks)
+                (sameOrderedTrackIdentity(it.tracks, playableTracks) || playableTracks.isEmpty())
         }
             ?.let { return@withLock it }
 
@@ -489,6 +502,7 @@ class PlaylistRepository @Inject constructor(
      * removal made in the UI while a scan runs is never overwritten. Rows
      * whose file path is in [updates] get the fresh metadata; [additions]
      * not already present (by path) are appended in order.
+     * Automatically deduplicates rows so songs are never present twice.
      */
     suspend fun mergeLocalSongs(
         updates: Map<String, GeneratedTrack>,
@@ -498,9 +512,21 @@ class PlaylistRepository @Inject constructor(
         return saveMutex.withLock {
             val entity = dao.getById(target.id) ?: return@withLock null
             val current = entity.toDomain().tracks
-            val present = current.mapTo(mutableSetOf()) { it.url }
-            val merged = current.map { updates[it.url] ?: it } +
-                additions.filter { present.add(it.url) }
+            val rawMerged = current.map { updates[it.url] ?: it } + additions
+
+            val seenUrls = mutableSetOf<String>()
+            val seenKeys = mutableSetOf<String>()
+            val merged = mutableListOf<GeneratedTrack>()
+            for (track in rawMerged) {
+                val url = track.url.trim()
+                val key = "${track.name.trim().lowercase()}|${track.artist.trim().lowercase()}"
+                val isNewByUrl = url.isNotBlank() && seenUrls.add(url)
+                val isNewByKey = (url.isBlank() || isNewByUrl) && seenKeys.add(key)
+                if (isNewByUrl || (url.isBlank() && isNewByKey)) {
+                    merged.add(track)
+                }
+            }
+
             if (merged == current) return@withLock entity.toDomain()
             val updated = entity.copy(tracksJson = json.encodeToString(merged.map { it.toStored() }))
             dao.upsert(updated)
@@ -515,8 +541,22 @@ class PlaylistRepository @Inject constructor(
 
     /** Creates the built-in local playlist only when it is genuinely absent. */
     suspend fun ensureLikedSongs(): SavedPlaylist = likedSongsMutex.withLock {
-        getLikedSongs()?.let { return@withLock it }
-        getAll().firstOrNull { it.title.equals(LIKED_SONGS_TITLE, ignoreCase = true) }?.let { legacy ->
+        getLikedSongs()?.let { existing ->
+            // The list was renamed so it cannot be mistaken for YouTube Music's. An older
+            // build called it "Liked Songs": rename that one in place rather than
+            // leaving a second list behind.
+            if (existing.title.equals(LIKED_SONGS_TITLE, ignoreCase = true)) return@withLock existing
+            val entity = dao.getById(existing.id)
+            if (entity != null) {
+                val renamed = entity.copy(title = LIKED_SONGS_TITLE)
+                dao.upsert(renamed)
+                syncPublicMirror()
+                _changes.tryEmit(Unit)
+                return@withLock renamed.toDomain()
+            }
+            return@withLock existing
+        }
+        getAll().firstOrNull { it.title.equals(LEGACY_LIKED_SONGS_TITLE, ignoreCase = true) }?.let { legacy ->
             val entity = dao.getById(legacy.id)
             if (entity != null) {
                 val adopted = entity.copy(

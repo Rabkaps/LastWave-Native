@@ -9,6 +9,8 @@ import com.lastwave.app.data.artwork.ArtworkNormalizer
 import com.lastwave.app.data.artwork.ArtworkRepository
 import com.lastwave.app.data.artwork.DeferredArtworkLookup
 import com.lastwave.app.data.local.AccentMode
+import com.lastwave.app.data.local.AppIcon
+import com.lastwave.app.data.local.AppIconManager
 import com.lastwave.app.data.local.MiscSettings
 import com.lastwave.app.data.local.SettingsPreferences
 import com.lastwave.app.data.local.ThemePreferences
@@ -24,6 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import android.os.Handler
 import android.os.Looper
@@ -46,16 +49,21 @@ data class ThemeUiState(
     /** Settings' "Use Application Font" toggle — see ui/theme/Type.kt for
      *  what turning it off falls back to. */
     val useCustomFont: Boolean = true,
+    val useBoldFont: Boolean = false,
     /** Experimental liquid-glass materials (Settings → Experimental). When
      *  true, container roles in [colorScheme] are semi-translucent and the
      *  chrome surfaces get specular glass dressing. */
     val liquidGlass: Boolean = true,
     val md3NavBar: Boolean = false,
+    val hideNavTabs: Boolean = false,
     /** True when the "Dynamic Now Playing" artwork override is currently
      *  driving the schemes. LastWaveTheme uses this so S+ system dynamic
      *  (wallpaper) only takes over when no now-playing color is active:
      *  now-playing wins, wallpaper-dynamic is next, manual/mono last. */
     val isNowPlayingThemed: Boolean = false,
+    /** Dedicated LastWave Signature Theme inspired by the app logo icon (#C9FB00 & #012226). */
+    val isLastWaveTheme: Boolean = false,
+    val appIcon: AppIcon = AppIcon.DEFAULT,
 )
 
 @Singleton
@@ -179,6 +187,7 @@ class ThemeRepository @Inject constructor(
                 android.util.Log.w("ThemeRepository", "Wallpaper listener unsupported on this ROM", error)
             }
         }
+
     }
 
     /** Wallpaper seed for DYNAMIC mode on pre-S devices (and as the data-layer
@@ -212,8 +221,14 @@ class ThemeRepository @Inject constructor(
     ) { prefs: ThemePrefs, dynamic: String?, nowPlaying: String?, misc: MiscSettings ->
         val isAmoled = prefs.amoled
         val isGlass = prefs.liquidGlass
-        val nowPlayingActive = misc.dynamicNowPlayingEnabled && nowPlaying != null
+        val isLastWave = prefs.lastWaveTheme
+        val nowPlayingActive = misc.dynamicNowPlayingEnabled && nowPlaying != null && !isLastWave
         val (darkScheme, lightScheme) = when {
+            isLastWave -> {
+                val dark = Md3SchemeBuilder.buildLastWaveDarkScheme(isAmoled, isGlass)
+                val light = Md3SchemeBuilder.buildLastWaveLightScheme(isGlass)
+                dark to light
+            }
             nowPlayingActive -> {
                 val dark = Md3SchemeBuilder.buildDarkScheme(nowPlaying!!, isAmoled, isGlass)
                 val light = Md3SchemeBuilder.buildLightScheme(nowPlaying, isGlass)
@@ -248,11 +263,15 @@ class ThemeRepository @Inject constructor(
             colorScheme = darkScheme,
             amoled = isAmoled,
             mode = prefs.accentMode,
-            accentColorHex = prefs.accentColor,
+            accentColorHex = if (isLastWave) "#C9FB00" else prefs.accentColor,
             useCustomFont = misc.useCustomFont,
+            useBoldFont = misc.useBoldFont,
             liquidGlass = isGlass,
             md3NavBar = prefs.md3NavBar,
+            hideNavTabs = prefs.hideNavTabs,
             isNowPlayingThemed = nowPlayingActive,
+            isLastWaveTheme = isLastWave,
+            appIcon = prefs.appIcon,
         )
     }.stateIn(
         applicationScope,
@@ -266,13 +285,24 @@ class ThemeRepository @Inject constructor(
             mode = AccentMode.MANUAL,
             accentColorHex = "#E03030",
             useCustomFont = true,
+            useBoldFont = false,
             liquidGlass = true,
             md3NavBar = false,
+            hideNavTabs = false,
+            isLastWaveTheme = false,
+            appIcon = AppIcon.DEFAULT,
         ),
     )
 
     suspend fun setThemeMode(mode: ThemeMode) {
         themePreferences.setThemeMode(mode)
+    }
+
+    suspend fun setLastWaveTheme(enabled: Boolean) = themePreferences.setLastWaveTheme(enabled)
+
+    suspend fun setAppIcon(icon: AppIcon) {
+        themePreferences.setAppIcon(icon)
+        AppIconManager.applyIcon(context, icon)
     }
 
     /** Manual pick always leaves DYNAMIC/MONOCHROME: choosing your own accent
@@ -292,6 +322,7 @@ class ThemeRepository @Inject constructor(
     suspend fun setLiquidGlass(enabled: Boolean) = themePreferences.setLiquidGlass(enabled)
 
     suspend fun setMd3NavBar(enabled: Boolean) = themePreferences.setMd3NavBar(enabled)
+    suspend fun setHideNavTabs(enabled: Boolean) = themePreferences.setHideNavTabs(enabled)
 
     /** Turning this on used to just flip the DataStore flag and wait for
      *  Home's own poll loop to eventually call updateNowPlayingArtwork() —

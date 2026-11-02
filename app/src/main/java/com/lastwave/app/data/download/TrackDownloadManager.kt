@@ -171,6 +171,9 @@ class TrackDownloadManager @Inject constructor(
         // Up to 5 tracks download at once; per-download buffers stay small
         // (128 KB x 4 ranges) so this remains safe on low-RAM devices.
         private const val MAX_CONCURRENT_DOWNLOADS = 5
+        private const val MAX_CONCURRENT_YOUTUBE_RESOLVES = 2
+        private const val RESOLVE_RETRY_DELAY_MS = 3_000L
+        private const val RESOLVE_RETRY_NETWORK_WAIT_MS = 15_000L
         /** Reconnectable transfer failures tolerated before the attempt is abandoned. */
         private const val MAX_TRANSFER_RETRIES = 6
         /** Bound on each YouTube stream-resolve step so one candidate can't wedge a slot. */
@@ -270,6 +273,7 @@ class TrackDownloadManager @Inject constructor(
     private val activeFiles = ConcurrentHashMap<String, File>()
     private val reconnectGenerations = ConcurrentHashMap<String, AtomicLong>()
     private val downloadSlots = Semaphore(MAX_CONCURRENT_DOWNLOADS)
+    private val youtubeResolveGate = Semaphore(MAX_CONCURRENT_YOUTUBE_RESOLVES)
     private val restoreMutex = Mutex()
 
     private val _downloads = MutableStateFlow<Map<String, DownloadProgress>>(emptyMap())
@@ -802,10 +806,13 @@ class TrackDownloadManager @Inject constructor(
                     val qualitiesToAttempt =
                         LosslessMusicApi.getQualityAttemptOrder(requestedDownloadQuality)
                     for (downloadQuality in qualitiesToAttempt) {
-                    // Spatial-tier veto (mirrors playback): never download an
-                    // Atmos manifest on a device that cannot render it. The
-                    // stereo tiers later in this same list are the fallback.
-                    if (downloadQuality == LosslessMusicApi.QUALITY_DOLBY_ATMOS && !atmosCapable) {
+                    // Spatial-tier veto: if the device cannot render spatial audio,
+                    // fallback to stereo tiers unless the user explicitly configured
+                    // Download Quality = Dolby Atmos.
+                    if (downloadQuality == LosslessMusicApi.QUALITY_DOLBY_ATMOS &&
+                        !atmosCapable &&
+                        requestedDownloadQuality != LosslessMusicApi.QUALITY_DOLBY_ATMOS
+                    ) {
                         android.util.Log.i(
                             "TrackDownloadManager",
                             "Atmos veto for $finalTitle by $finalArtist: device cannot render spatial; trying stereo tiers",
@@ -861,6 +868,7 @@ class TrackDownloadManager @Inject constructor(
                                     // spatial manifest on an incapable device
                                     // is unplayable — cascade to stereo tiers.
                                     if (!atmosCapable &&
+                                        requestedDownloadQuality != LosslessMusicApi.QUALITY_DOLBY_ATMOS &&
                                         (manifestCodec.startsWith("ec-3") ||
                                             manifestCodec.startsWith("eac3") ||
                                             manifestCodec.startsWith("ac-3"))
@@ -967,6 +975,7 @@ class TrackDownloadManager @Inject constructor(
                                     // request could be stored as AAC while claiming FLAC.
                                     val manifestCodec = parsedDash.codec.ifBlank { s.codec.lowercase() }
                                     if (!atmosCapable &&
+                                        requestedDownloadQuality != LosslessMusicApi.QUALITY_DOLBY_ATMOS &&
                                         (manifestCodec.startsWith("ec-3") ||
                                             manifestCodec.startsWith("eac3") ||
                                             manifestCodec.startsWith("ac-3"))
@@ -1235,7 +1244,6 @@ class TrackDownloadManager @Inject constructor(
                         // Never single-shot strict match — search more, try each.
                         // Budgeted so one wedged track cannot hold a
                         // download slot and stall the batch queue.
-                        val ytFallbackStartMs = android.os.SystemClock.elapsedRealtime()
                         val ytResolveBudgetMs = 60_000L
                         val candidateTracks = linkedMapOf<String, YouTubeMusicTrack>()
                         val isPlausibleTrack: (YouTubeMusicTrack) -> Boolean = { track ->
@@ -1268,46 +1276,64 @@ class TrackDownloadManager @Inject constructor(
                         var actualVideoId: String? = null
                         var chosenTrack: YouTubeMusicTrack? = null
                         var lastResolveError: Throwable? = null
-                        for ((candidateId, candidateTrack) in candidateTracks) {
-                            if (android.os.SystemClock.elapsedRealtime() - ytFallbackStartMs > ytResolveBudgetMs) {
-                                android.util.Log.w(
-                                    "TrackDownloadManager",
-                                    "YouTube resolve budget exhausted for $finalTitle by $finalArtist; skipping remaining candidates",
-                                )
-                                break
-                            }
-                            // 1. Same waterfall playback uses (cache + multi-client direct URLs).
-                            val playbackStream = try {
-                                kotlinx.coroutines.withTimeoutOrNull(YT_STREAM_RESOLVE_TIMEOUT_MS) {
-                                    innerTube.peekCachedStream(candidateId)
-                                        ?: innerTube.resolveAudioStream(candidateId)
+                        // Parallel resolves queue on one local cipher until their budgets
+                        // expire, and bursts of player requests invite the bot check.
+                        // Only resolving is limited here; transfers still run in parallel.
+                        youtubeResolveGate.acquire()
+                        try {
+                            val ytFallbackStartMs = android.os.SystemClock.elapsedRealtime()
+                            for (resolveRound in 0..1) {
+                                for ((candidateId, candidateTrack) in candidateTracks) {
+                                    if (android.os.SystemClock.elapsedRealtime() - ytFallbackStartMs > ytResolveBudgetMs) {
+                                        android.util.Log.w(
+                                            "TrackDownloadManager",
+                                            "YouTube resolve budget exhausted for $finalTitle by $finalArtist; skipping remaining candidates",
+                                        )
+                                        break
+                                    }
+                                    // 1. Same waterfall playback uses (cache + multi-client direct URLs).
+                                    val playbackStream = try {
+                                        kotlinx.coroutines.withTimeoutOrNull(YT_STREAM_RESOLVE_TIMEOUT_MS) {
+                                            innerTube.peekCachedStream(candidateId)
+                                                ?: innerTube.resolveAudioStream(candidateId)
+                                        }
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (error: Exception) {
+                                        lastResolveError = error
+                                        null
+                                    }
+                                    // 2. Opus preference: if playback picked AAC (or failed),
+                                    // ask NewPipe for the WebM/Opus rendition, which is
+                                    // remuxed below into a fully tagged .opus file.
+                                    val opusStream = playbackStream?.takeIf { it.isOpusStream() } ?: try {
+                                        kotlinx.coroutines.withTimeoutOrNull(YT_STREAM_RESOLVE_TIMEOUT_MS) {
+                                            innerTube.resolveDownloadStream(candidateId)
+                                        }
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (error: Exception) {
+                                        lastResolveError = error
+                                        null
+                                    }
+                                    pickedStream = opusStream?.takeIf { it.isOpusStream() } ?: playbackStream ?: opusStream
+                                    if (pickedStream != null) {
+                                        actualVideoId = candidateId
+                                        resolvedYtVideoId = candidateId
+                                        chosenTrack = candidateTrack
+                                        break
+                                    }
                                 }
-                            } catch (cancelled: CancellationException) {
-                                throw cancelled
-                            } catch (error: Exception) {
-                                lastResolveError = error
-                                null
-                            }
-                            // 2. Opus preference: if playback picked AAC (or failed),
-                            // ask NewPipe for the WebM/Opus rendition, which is
-                            // remuxed below into a fully tagged .opus file.
-                            val opusStream = playbackStream?.takeIf { it.isOpusStream() } ?: try {
-                                kotlinx.coroutines.withTimeoutOrNull(YT_STREAM_RESOLVE_TIMEOUT_MS) {
-                                    innerTube.resolveDownloadStream(candidateId)
+                                if (pickedStream != null ||
+                                    android.os.SystemClock.elapsedRealtime() - ytFallbackStartMs > ytResolveBudgetMs
+                                ) {
+                                    break
                                 }
-                            } catch (cancelled: CancellationException) {
-                                throw cancelled
-                            } catch (error: Exception) {
-                                lastResolveError = error
-                                null
+                                // One more pass for a dropped connection or a brief failure.
+                                if (resolveRound == 0) awaitNetworkForResolveRetry()
                             }
-                            pickedStream = opusStream?.takeIf { it.isOpusStream() } ?: playbackStream ?: opusStream
-                            if (pickedStream != null) {
-                                actualVideoId = candidateId
-                                resolvedYtVideoId = candidateId
-                                chosenTrack = candidateTrack
-                                break
-                            }
+                        } finally {
+                            youtubeResolveGate.release()
                         }
                         val resolvedStream = pickedStream
                             ?: throw (lastResolveError ?: IOException("No playable YouTube stream for $finalTitle by $finalArtist"))
@@ -1323,6 +1349,14 @@ class TrackDownloadManager @Inject constructor(
                         downloadHeaders = ytStream.requestHeaders
                         expectedContentLength = ytStream.contentLength
                             ?: runCatching { Uri.parse(ytStream.url).getQueryParameter("clen")?.toLongOrNull() }.getOrNull()
+                        if (durationMs <= 0L) {
+                            val candidateMs = pickedStream?.durationMs
+                                ?: (chosenTrack?.durationSeconds?.takeIf { it > 0 }?.times(1000L))
+                                ?: (preloadedBestMatch?.durationSeconds?.takeIf { it > 0 }?.times(1000L))
+                            if (candidateMs != null && candidateMs > 0L) {
+                                durationMs = candidateMs
+                            }
+                        }
                         useParallelDownload = true
                         val rawMime = ytStream.mimeType.orEmpty().lowercase()
                         if (rawMime.contains("mp4") || rawMime.contains("m4a") || rawMime.contains("aac")) {
@@ -1672,11 +1706,14 @@ class TrackDownloadManager @Inject constructor(
                         artworkFallback?.cancel()
                     }
                     if (resolvedArtworkUrl == null) {
-                        // Last resort (SimpMusic/Metrolist style): the YouTube
-                        // thumbnail for the exact downloaded video always exists.
-                        resolvedArtworkUrl = resolvedYtVideoId?.takeIf { it.isNotBlank() }
-                            ?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" }
+                        // Last resort (SimpMusic/Metrolist style): prefer YouTube Music thumbnail if available,
+                        // otherwise the YouTube thumbnail for the exact downloaded video.
+                        val ytMusicThumb = preloadedBestMatch?.artworkUrl?.takeIf {
+                            ArtworkNormalizer.isRealImage(it) && ArtworkNormalizer.isYtMusicThumbnail(it)
+                        }
+                        resolvedArtworkUrl = ytMusicThumb
                             ?: preloadedBestMatch?.artworkUrl?.takeIf { ArtworkNormalizer.isRealImage(it) }
+                            ?: resolvedYtVideoId?.takeIf { it.isNotBlank() }?.let { "https://i.ytimg.com/vi/$it/hqdefault.jpg" }
                     }
 
                     // 4. Embed metadata, cover art AND lyrics directly into the
@@ -1695,6 +1732,13 @@ class TrackDownloadManager @Inject constructor(
                     )
                     if (!metadataEmbedded) {
                         android.util.Log.w("TrackDownloadManager", "Could not safely embed audio metadata; preserving audio file")
+                    }
+
+                    // 4b. Finalize fragmented MP4 indexing (Atmos & AAC .m4a):
+                    // Patch duration into mvhd/mdhd and append Movie Fragment Random
+                    // Access (mfra) index so ExoPlayer and external players can seek.
+                    if (extension.equals("m4a", ignoreCase = true) || extension.equals("mp4", ignoreCase = true)) {
+                        Fmp4IndexBuilder.finalizeFmp4(currentAudioFile, durationMs)
                     }
 
                     // 5. Transfer tagged file to public storage / MediaStore
@@ -2478,6 +2522,16 @@ class TrackDownloadManager @Inject constructor(
             if (elapsedMs >= retryDelayMs && hasUsableNetwork()) return
             delay(RECONNECT_POLL_INTERVAL_MS)
             elapsedMs += RECONNECT_POLL_INTERVAL_MS
+        }
+    }
+
+    private suspend fun awaitNetworkForResolveRetry() {
+        delay(RESOLVE_RETRY_DELAY_MS)
+        val waitStartMs = android.os.SystemClock.elapsedRealtime()
+        while (!hasUsableNetwork() &&
+            android.os.SystemClock.elapsedRealtime() - waitStartMs < RESOLVE_RETRY_NETWORK_WAIT_MS
+        ) {
+            delay(RECONNECT_POLL_INTERVAL_MS)
         }
     }
 

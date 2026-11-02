@@ -225,6 +225,7 @@ class HomeViewModel @Inject constructor(
     private val viewingProfileState: com.lastwave.app.data.repository.ViewingProfileState,
     private val settingsPreferences: com.lastwave.app.data.local.SettingsPreferences,
     private val scrobbleRepository: com.lastwave.app.data.repository.ScrobbleRepository,
+    private val artworkRepository: com.lastwave.app.data.artwork.ArtworkRepository,
 ) : ViewModel() {
 
     companion object {
@@ -437,6 +438,7 @@ class HomeViewModel @Inject constructor(
                             )
                         }
                         preloadLocalTags()
+                        enrichArtistArtworks(local.topArtists.take(10))
                     } ?: _uiState.update {
                         it.copy(isLoading = false, username = username, viewingUsername = username, error = e.message ?: "Couldn't load your data")
                     }
@@ -509,7 +511,11 @@ class HomeViewModel @Inject constructor(
     private fun preloadTopMeta(username: String, period: String = "overall") {
         viewModelScope.launch(Dispatchers.IO) {
             homeRepository.fetchTopArtistsForPeriod(period, 10, username = username)
-                .onSuccess { artists -> _uiState.update { it.copy(topArtists = artists.take(10)) } }
+                .onSuccess { artists ->
+                    val top = artists.take(10)
+                    _uiState.update { it.copy(topArtists = top) }
+                    enrichArtistArtworks(top)
+                }
         }
         viewModelScope.launch(Dispatchers.IO) {
             homeRepository.fetchTopAlbums(period = period, limit = 10, username = username)
@@ -541,6 +547,21 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch(Dispatchers.IO) {
             homeRepository.fetchTopTracksForPeriod("1month", 50, username = target).onSuccess { tracks ->
                 _uiState.update { it.copy(topTracks30Days = tracks) }
+            }
+        }
+    }
+
+    private fun enrichArtistArtworks(artists: List<HomeArtistItem>) {
+        if (artists.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val updated = artists.map { artist ->
+                if (artist.artworkUrl.isNullOrBlank()) {
+                    val resolved = artworkRepository.resolveArtist(artist.name)
+                    if (resolved != null) artist.copy(artworkUrl = resolved) else artist
+                } else artist
+            }
+            _uiState.update { state ->
+                state.copy(topArtists = updated)
             }
         }
     }
@@ -773,6 +794,7 @@ class HomeViewModel @Inject constructor(
                                 )
                             }
                             preloadLocalTags()
+                        enrichArtistArtworks(local.topArtists.take(10))
                         } ?: _uiState.update {
                             it.copy(isLoading = false, error = e.message ?: "Couldn't load that profile")
                         }
@@ -853,9 +875,12 @@ class HomeViewModel @Inject constructor(
      *  so polling stops the moment the screen backgrounds. Polls whichever
      *  account is currently being viewed (yours, or a friend's). */
     suspend fun pollWhileActive() = coroutineScope {
-        // Immediately fetch newest tracks and stats on opening/returning to Home screen
-        refreshSilently()
+        // We no longer refresh automatically on opening/returning to Home screen
+        // refreshSilently()
 
+        // Also disabling the automatic polling loops to prevent auto-refreshing at the home page.
+        // If users want new data, they must manually pull-to-refresh.
+        /*
         launch {
             while (true) {
                 delay(NOW_PLAYING_POLL_MS)
@@ -875,7 +900,7 @@ class HomeViewModel @Inject constructor(
                         }
                         // When a track finishes or changes, auto-refresh recent tracks list immediately
                         if (trackEnded || (trackChanged && previousNp != null)) {
-                            refreshSilently()
+                            // refreshSilently() // disabled
                         }
                     }?.onFailure {
                         // On error or rate limit, back off for 15 seconds before retrying
@@ -884,6 +909,8 @@ class HomeViewModel @Inject constructor(
                 }
             }
         }
+        */
+        /*
         launch {
             while (true) {
                 delay(RECENT_TRACKS_POLL_MS)
@@ -913,6 +940,7 @@ class HomeViewModel @Inject constructor(
                 }
             }
         }
+        */
         launch {
             while (true) {
                 delay(LISTEN_TICK_MS)

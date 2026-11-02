@@ -36,8 +36,13 @@ internal object TextMatch {
         "现场", "翻唱", "混音",
         "лайв", "кавер", "ремикс",
     )
-    val MATCH_NOISE_WORDS = setOf("official", "audio", "video", "visualizer", "lyrics", "lyric", "hd", "hq", "4k", "track", "music")
+    val MATCH_NOISE_WORDS = setOf(
+        "official", "audio", "video", "visualizer", "lyrics", "lyric", "hd", "hq", "4k", "track", "music",
+        "ost", "soundtrack", "lyrical", "full"
+    )
     private val FEATURING_CLAUSE = Regex("(?i)[(\\[]\\s*(feat(?:uring)?|ft)\\.?\\s+.*?[)\\]]")
+    private val SOUNDTRACK_OR_OST_CLAUSE =
+        Regex("(?i)[(\\[]\\s*(from\\s+[\"']?|ost\\b|original\\s+(?:motion\\s+picture\\s+)?soundtrack)[^)\\]]*[)\\]]")
     private val VERSION_OR_LABEL_CLAUSE =
         Regex("(?i)[(\\[][^)\\]]*(official|music\\s*video|audio|video|visualizer|lyrics?|hd|hq|4k|live|remix|acoustic|demo|edit|remaster(?:ed)?|mono|stereo|deluxe|bonus|version|mix)[^)\\]]*[)\\]]")
 
@@ -83,7 +88,10 @@ internal object TextMatch {
         .toSet()
 
     fun baseTitle(value: String): String = value
+        .substringBefore(" | ")
+        .substringBefore(" // ")
         .replace(FEATURING_CLAUSE, " ")
+        .replace(SOUNDTRACK_OR_OST_CLAUSE, " ")
         .replace(VERSION_OR_LABEL_CLAUSE, " ")
 
     fun similarity(a: String, b: String): Int {
@@ -178,6 +186,24 @@ internal object TextMatch {
         if (titleSim < 50) {
             score -= 1500
         }
+
+        // Strongly prefer official YouTube Music tracks (with album and YT Music thumbnails)
+        // over general YouTube videos (with ytimg video thumbnails or video keywords).
+        val art = candidate.artworkUrl.orEmpty()
+        val isYtMusicThumb = (art.contains("googleusercontent.com") || art.contains("ggpht.com")) && !art.contains("ytimg.com")
+        if (isYtMusicThumb) score += 350
+        if (!candidate.album.isNullOrBlank()) score += 200
+
+        val isVideoThumb = art.contains("ytimg.com") || art.contains("youtube.com/vi")
+        if (isVideoThumb) score -= 400
+
+        val candidateTokens = tokens(candidate.title)
+        val videoNoise = setOf("video", "mv", "musicvideo")
+        val unwantedVideoWords = candidateTokens.intersect(videoNoise) - tokens(title).intersect(videoNoise)
+        if (unwantedVideoWords.isNotEmpty()) {
+            score -= unwantedVideoWords.size * 200
+        }
+
         return score
     }
 }
