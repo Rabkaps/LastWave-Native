@@ -3,8 +3,10 @@ package com.lastwave.wear.ui.screens
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
@@ -33,6 +35,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -55,9 +58,12 @@ import coil.compose.AsyncImage
 import com.lastwave.core.sync.PlaybackCommand
 import com.lastwave.core.sync.WearPlaybackState
 import com.lastwave.wear.R
+import com.lastwave.wear.ui.MainActivity
 import com.lastwave.wear.ui.ambient.isAmbientMode
 import com.lastwave.wear.ui.rotary.withRotaryHaptics
 import kotlinx.coroutines.delay
+import kotlin.math.cos
+import kotlin.math.sin
 
 @Composable
 fun NowPlayingScreen(
@@ -80,13 +86,23 @@ fun NowPlayingScreen(
 
     // Dynamic responsive sizing based on watch physical screen canvas
     val screenDp = config.screenWidthDp.coerceAtLeast(180)
-    val artworkSize = (screenDp * 0.23f).dp
-    val playBtnSize = (screenDp * 0.20f).dp
+    val artworkSize = (screenDp * 0.24f).dp
+    val playBtnSize = (screenDp * 0.21f).dp
     val skipBtnSize = (screenDp * 0.16f).dp
     val dockBtnSize = (screenDp * 0.13f).dp
 
     LaunchedEffect(Unit) {
         runCatching { focusRequester.requestFocus() }
+    }
+
+    // Hardware Rotary Crown / Rotating Bezel Listener
+    LaunchedEffect(Unit) {
+        MainActivity.rotaryDeltaFlow.collect { delta ->
+            val change = delta * 0.04f
+            volumeLevel = (volumeLevel + change).coerceIn(0f, 1f)
+            showVolumeOverlay = true
+            onVolumeDelta(delta * 250f)
+        }
     }
 
     LaunchedEffect(showVolumeOverlay, volumeLevel) {
@@ -102,12 +118,27 @@ fun NowPlayingScreen(
 
     val progressColor = MaterialTheme.colorScheme.primary
     val volumeColor = MaterialTheme.colorScheme.secondary
-    val trackBgColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.35f)
+    val trackBgColor = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.4f)
+
+    val ambientBackground = if (ambient) {
+        Modifier.background(Color.Black)
+    } else {
+        Modifier.background(
+            Brush.radialGradient(
+                colors = listOf(
+                    Color(0xFF1E2800).copy(alpha = 0.45f),
+                    Color(0xFF0A0C0E),
+                    Color.Black
+                ),
+                radius = screenDp.toFloat() * 1.6f
+            )
+        )
+    }
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .then(ambientBackground)
             .focusRequester(focusRequester)
             .focusable()
             .withRotaryHaptics(context) { delta ->
@@ -122,7 +153,7 @@ fun NowPlayingScreen(
             // 270° Outer Bezel Circular Arc tracing the watch rim
             Canvas(modifier = Modifier.fillMaxSize()) {
                 val strokeWidth = 3.5.dp.toPx()
-                val inset = strokeWidth / 2f + 2.dp.toPx()
+                val inset = strokeWidth / 2f + 2.5.dp.toPx()
                 val arcSize = Size(size.width - inset * 2, size.height - inset * 2)
                 val topLeft = Offset(inset, inset)
 
@@ -130,6 +161,7 @@ fun NowPlayingScreen(
                 val startAngle = 135f
                 val totalSweep = 270f
 
+                // Track Background
                 drawArc(
                     color = trackBgColor,
                     startAngle = startAngle,
@@ -141,7 +173,7 @@ fun NowPlayingScreen(
                 )
 
                 if (showVolumeOverlay) {
-                    // When rotary is actively turning, bezel displays volume arc
+                    // Bezel Volume Arc with Cyan/Blue glow
                     val volSweep = totalSweep * volumeLevel
                     if (volSweep > 0f) {
                         drawArc(
@@ -165,6 +197,20 @@ fun NowPlayingScreen(
                         topLeft = topLeft,
                         size = arcSize,
                         style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
+                    )
+
+                    // Glowing Head Indicator Dot at the progress tip
+                    val currentAngleRad = Math.toRadians((startAngle + progSweep).toDouble())
+                    val centerX = size.width / 2f
+                    val centerY = size.height / 2f
+                    val radius = (size.width - inset * 2) / 2f
+                    val dotX = centerX + radius * cos(currentAngleRad).toFloat()
+                    val dotY = centerY + radius * sin(currentAngleRad).toFloat()
+
+                    drawCircle(
+                        color = Color.White,
+                        radius = strokeWidth * 0.9f,
+                        center = Offset(dotX, dotY)
                     )
                 }
             }
@@ -278,7 +324,7 @@ fun NowPlayingScreen(
                     }
                 }
 
-                // Middle: Responsive Album Art & Track Info
+                // Middle: Responsive Vinyl-Style Album Art & Track Info
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
@@ -290,11 +336,19 @@ fun NowPlayingScreen(
                             }
                         }
                 ) {
-                    // Artwork Thumbnail
+                    // Artwork Thumbnail with concentric vinyl border
                     Box(
                         modifier = Modifier
                             .size(artworkSize)
                             .clip(CircleShape)
+                            .border(
+                                BorderStroke(
+                                    1.5.dp,
+                                    if (state.isPlaying) MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                                    else MaterialTheme.colorScheme.surfaceContainerHigh
+                                ),
+                                CircleShape
+                            )
                             .background(MaterialTheme.colorScheme.surfaceContainerHigh),
                         contentAlignment = Alignment.Center
                     ) {
@@ -358,7 +412,7 @@ fun NowPlayingScreen(
                     }
                 }
 
-                // Lower: Transport Controls
+                // Lower: Circular Transport Controls
                 Row(
                     modifier = Modifier.fillMaxWidth(0.92f),
                     horizontalArrangement = Arrangement.Center,
@@ -422,7 +476,7 @@ fun NowPlayingScreen(
                     }
                 }
 
-                // Bottom Circular Dock: Browse on Left, Timestamp/Volume in Center, Settings on Right
+                // Bottom Circular Action Capsule
                 Row(
                     modifier = Modifier
                         .fillMaxWidth(0.85f)

@@ -32,6 +32,12 @@ import com.lastwave.wear.ui.screens.NowPlayingScreen
 import com.lastwave.wear.ui.screens.SettingsScreen
 import com.lastwave.wear.ui.theme.LastWaveWearTheme
 import kotlinx.coroutines.launch
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.view.MotionEvent
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 
 enum class WearScreen {
     NOW_PLAYING,
@@ -41,6 +47,34 @@ enum class WearScreen {
 }
 
 class MainActivity : ComponentActivity() {
+
+    companion object {
+        val rotaryDeltaFlow = MutableSharedFlow<Float>(
+            extraBufferCapacity = 16,
+            onBufferOverflow = BufferOverflow.DROP_OLDEST
+        )
+    }
+
+    override fun onGenericMotionEvent(event: MotionEvent?): Boolean {
+        if (event?.action == MotionEvent.ACTION_SCROLL) {
+            val delta = -event.getAxisValue(MotionEvent.AXIS_SCROLL)
+            if (delta != 0f) {
+                vibrateRotaryTick()
+                rotaryDeltaFlow.tryEmit(delta)
+                return true
+            }
+        }
+        return super.onGenericMotionEvent(event)
+    }
+
+    private fun vibrateRotaryTick() {
+        runCatching {
+            val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && vibrator?.hasVibrator() == true) {
+                vibrator.vibrate(VibrationEffect.createPredefined(VibrationEffect.EFFECT_TICK))
+            }
+        }
+    }
 
     private val syncClient by lazy { WearApp.instance.syncClient }
     private val cacheManager by lazy { WearApp.instance.cacheManager }

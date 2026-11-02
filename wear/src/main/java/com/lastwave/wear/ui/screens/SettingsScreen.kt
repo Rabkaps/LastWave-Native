@@ -76,6 +76,12 @@ fun SettingsScreen(
         runCatching { focusRequester.requestFocus() }
     }
 
+    LaunchedEffect(Unit) {
+        com.lastwave.wear.ui.MainActivity.rotaryDeltaFlow.collect { delta ->
+            listState.scrollBy(delta * 140f)
+        }
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
